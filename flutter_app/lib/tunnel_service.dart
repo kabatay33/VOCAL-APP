@@ -82,8 +82,11 @@ class TunnelService extends ChangeNotifier {
       rethrow;
     }
 
+    // Cloudflare TryCloudflare URL regex — hem eski hem yeni format
+    // Eski: https://random-words.trycloudflare.com
+    // Yeni: https://random-words-1234.trycloudflare.com veya alt domain'li
     final urlRegex = RegExp(
-        r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com',
+        r'https://[a-zA-Z0-9][a-zA-Z0-9\-]*\.trycloudflare\.com',
         caseSensitive: false);
 
     void handleLine(String line) {

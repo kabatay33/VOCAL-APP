@@ -52,6 +52,16 @@ if (-not (Test-Path $releaseDir)) {
 }
 
 # 3) Zip olustur
+# cloudflared.exe'yi release output'a kopyala
+$cloudflaredSrc = Join-Path $projectRoot "flutter_app\windows\tunnel_native\cloudflared\cloudflared.exe"
+$cloudflaredDst = Join-Path $releaseDir "cloudflared.exe"
+if (Test-Path $cloudflaredSrc) {
+  Copy-Item -Path $cloudflaredSrc -Destination $cloudflaredDst -Force
+  Write-Host "cloudflared.exe kopyalandı"
+} else {
+  Write-Warning "cloudflared.exe bulunamadı: $cloudflaredSrc"
+}
+
 Write-Host "`nZip olusturuluyor: $zipOut"
 if (Test-Path $zipOut) { Remove-Item $zipOut -Force }
 Compress-Archive -Path "$releaseDir\*" -DestinationPath $zipOut -Force
