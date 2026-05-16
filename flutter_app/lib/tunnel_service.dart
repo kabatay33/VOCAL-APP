@@ -1,8 +1,11 @@
 /// Tunnel servisi — playit.gg.
 ///
-/// playit.gg: Ücretsiz, WebSocket desteği, kurulum gerektirmiyor.
-/// playit.exe indirilir, çalıştırılır, URL alınır.
-/// URL formatı: https://xxx.playit.gg veya doğrudan IP:port
+/// playit.gg: Ücretsiz, WebSocket desteği.
+/// playit.exe secret key ile çalışır.
+/// Secret key: https://playit.gg/account → "Create Secret Key"
+///
+/// Not: playit.exe --tcp DESTEKLENMIYOR (yeni versiyon).
+/// Yeni versiyon --secret ile çalışır ve otomatik tunnel oluşturur.
 
 library;
 
@@ -19,6 +22,7 @@ class TunnelService extends ChangeNotifier {
   String? _publicUrl;
   String? _statusMessage;
   bool _starting = false;
+  String? _secretKey;
   final List<String> _recentLogs = [];
 
   String? get publicUrl => _publicUrl;
@@ -27,12 +31,26 @@ class TunnelService extends ChangeNotifier {
   String? get statusMessage => _statusMessage;
   List<String> get recentLogs => List.unmodifiable(_recentLogs);
 
+  /// Secret key ayarla (https://playit.gg/account'dan alınır).
+  void setSecretKey(String key) {
+    _secretKey = key.trim();
+  }
+
   Future<String> start({int localPort = 3000}) async {
     if (_starting) {
       throw StateError('Tunnel zaten başlatılıyor');
     }
     if (running && _publicUrl != null) {
       return _publicUrl!;
+    }
+
+    if (_secretKey == null || _secretKey!.isEmpty) {
+      _statusMessage = 'playit.gg secret key gerekli';
+      notifyListeners();
+      throw StateError(
+        'playit.gg secret key ayarlanmamış.\n'
+        'https://playit.gg/account → "Create Secret Key"\n'
+        'Sonra: TunnelService.instance.setSecretKey("key-xxx")');
     }
 
     _starting = true;
@@ -55,7 +73,7 @@ class TunnelService extends ChangeNotifier {
     try {
       _process = await Process.start(
         exePath,
-        ['--tcp', 'localhost:$localPort'],
+        ['--secret', _secretKey!],
         mode: ProcessStartMode.normal,
       );
     } catch (e) {
@@ -65,15 +83,14 @@ class TunnelService extends ChangeNotifier {
       rethrow;
     }
 
+    // playit.gg URL formatı: "tunnel.*: https://xxx.playit.gg" veya benzeri
     final urlRegex = RegExp(
         r'https://[a-zA-Z0-9][a-zA-Z0-9\-]*\.playit\.gg',
         caseSensitive: false);
-    final portRegex =
-        RegExp(r'(?:port|tunnel).*?(\d{2,5})', caseSensitive: false);
 
     void handleLine(String line) {
       _recentLogs.add(line);
-	      while (_recentLogs.length > 50) { _recentLogs.removeAt(0); }
+      while (_recentLogs.length > 50) { _recentLogs.removeAt(0); }
       debugPrint('[PLAYIT] $line');
 
       final m = urlRegex.firstMatch(line);
@@ -83,23 +100,6 @@ class TunnelService extends ChangeNotifier {
         _starting = false;
         notifyListeners();
         completer.complete(_publicUrl!);
-        return;
-      }
-
-      final pm = portRegex.firstMatch(line);
-      if (pm != null && !completer.isCompleted) {
-        final port = pm.group(1);
-        if (port != null && port != localPort.toString()) {
-          _resolvePublicIp().then((ip) {
-            if (!completer.isCompleted) {
-              _publicUrl = 'http://$ip:$port';
-              _statusMessage = 'Tunnel aktif (playit.gg)';
-              _starting = false;
-              notifyListeners();
-              completer.complete(_publicUrl!);
-            }
-          });
-        }
       }
     }
 
@@ -125,10 +125,10 @@ class TunnelService extends ChangeNotifier {
       }
     });
 
-    timeoutTimer = Timer(const Duration(seconds: 45), () {
+    timeoutTimer = Timer(const Duration(seconds: 60), () {
       if (!completer.isCompleted) {
         completer.completeError(TimeoutException(
-            'playit.gg 45 sn içinde URL döndürmedi.\nLoglar:\n${_recentLogs.join("\n")}'));
+            'playit.gg 60 sn içinde URL döndürmedi.\nLoglar:\n${_recentLogs.join("\n")}'));
       }
     });
 
@@ -140,19 +140,6 @@ class TunnelService extends ChangeNotifier {
       timeoutTimer.cancel();
       await stop();
       rethrow;
-    }
-  }
-
-  Future<String> _resolvePublicIp() async {
-    try {
-      final client = HttpClient();
-      final req = await client.getUrl(Uri.parse('https://api.ipify.org'));
-      final res = await req.close();
-      final body = await res.transform(const SystemEncoding().decoder).join();
-      client.close();
-      return body.trim();
-    } catch (_) {
-      return '0.0.0.0';
     }
   }
 

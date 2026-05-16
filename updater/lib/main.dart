@@ -2,26 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:window_manager/window_manager.dart';
-import 'package:http/http.dart' as http;
 
 const String githubOwner = 'kabatay33';
 const String githubRepo = 'VOCAL-APP';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await windowManager.ensureInitialized();
-  const windowOptions = WindowOptions(
-    size: Size(480, 340),
-    minimumSize: Size(420, 300),
-    center: true,
-    title: 'VOCAL-APP Updater',
-    skipTaskbar: false,
-  );
-  windowManager.waitUntilReadyToShow(windowOptions, () async {
-    await windowManager.show();
-    await windowManager.focus();
-  });
+void main() {
   runApp(const UpdaterApp());
 }
 
@@ -74,7 +59,7 @@ class _Asset {
   _Asset({required this.name, required this.downloadUrl, required this.size});
 }
 
-enum _State { checking, upToDate, found, downloading, applying, done, error }
+enum _State { checking, upToDate, downloading, applying, done, error }
 
 class UpdaterScreen extends StatefulWidget {
   const UpdaterScreen({super.key});
@@ -89,19 +74,17 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
   String? _currentVersion;
   String? _latestVersion;
   double _progress = 0;
-  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _run();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _run());
   }
 
   String get _installDir => File(Platform.resolvedExecutable).parent.path;
 
   Future<void> _run() async {
     try {
-      // Mevcut sürüm
       _currentVersion = _readVersion();
       setState(() {
         _status = 'Mevcut sürüm: ${_currentVersion ?? "bilinmiyor"}\nGitHub kontrol ediliyor...';
@@ -109,16 +92,14 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
 
       await Future.delayed(const Duration(milliseconds: 500));
 
-      // GitHub
       final release = await _fetchRelease();
       if (release == null) {
         setState(() {
           _state = _State.error;
-          _error = 'GitHub\'a bağlanılamadı';
-          _status = 'Bağlantı hatası — mevcut sürümle devam ediliyor';
+          _status = 'GitHub\'a bağlanılamadı\nMevcut sürümle devam ediliyor';
         });
         await Future.delayed(const Duration(seconds: 2));
-        _launch();
+        _launchAndExit();
         return;
       }
 
@@ -130,25 +111,19 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
           _status = 'Uygulama güncel!\nSürüm: $_currentVersion';
         });
         await Future.delayed(const Duration(seconds: 1));
-        _launch();
+        _launchAndExit();
         return;
       }
 
       // Yeni sürüm var
-      setState(() {
-        _state = _State.found;
-        _status = 'Yeni sürüm bulundu!\n$_currentVersion → $_latestVersion';
-      });
-
       final zipAsset = release.zipAsset;
       if (zipAsset == null) {
         setState(() {
           _state = _State.error;
-          _error = 'Release\'de .zip dosyası yok';
-          _status = 'Güncelleme bulunamadı — mevcut sürümle devam';
+          _status = 'Release\'de .zip dosyası yok\nMevcut sürümle devam';
         });
         await Future.delayed(const Duration(seconds: 2));
-        _launch();
+        _launchAndExit();
         return;
       }
 
@@ -173,7 +148,6 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
       setState(() {
         _state = _State.applying;
         _status = 'Güncelleme uygulanıyor...';
-        _progress = 0;
       });
 
       final extractDir = Directory('${staging.path}${Platform.pathSeparator}extracted');
@@ -185,7 +159,6 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
       _copyRecursive(extractDir, _installDir);
       _writeVersion(_latestVersion!);
 
-      // Temizlik
       try { staging.deleteSync(recursive: true); } catch (_) {}
 
       setState(() {
@@ -194,27 +167,24 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
       });
 
       await Future.delayed(const Duration(seconds: 1));
-      _launch();
+      _launchAndExit();
     } catch (e) {
       setState(() {
         _state = _State.error;
-        _error = e.toString();
         _status = 'Hata: $e\nMevcut sürümle devam ediliyor...';
       });
       await Future.delayed(const Duration(seconds: 2));
-      _launch();
+      _launchAndExit();
     }
   }
 
-  void _launch() {
+  void _launchAndExit() {
     final exePath = '$_installDir${Platform.pathSeparator}discord_clone.exe';
     if (File(exePath).existsSync()) {
       Process.start(exePath, [], mode: ProcessStartMode.detached, runInShell: false);
     }
     exit(0);
   }
-
-  // ==================== UI ====================
 
   @override
   Widget build(BuildContext context) {
@@ -234,11 +204,13 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
                 const Text('VOCAL-APP Updater',
                     style: TextStyle(color: Colors.white70, fontSize: 12)),
                 const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 16, color: Colors.white54),
-                  onPressed: () => exit(0),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                GestureDetector(
+                  onTap: () => exit(0),
+                  child: Container(
+                    width: 28, height: 28,
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.close, size: 16, color: Colors.white54),
+                  ),
                 ),
               ],
             ),
@@ -251,31 +223,26 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Logo
                     Container(
-                      width: 64,
-                      height: 64,
+                      width: 64, height: 64,
                       decoration: BoxDecoration(
                         color: const Color(0xFF5865F2),
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
                             color: const Color(0xFF5865F2).withValues(alpha: 0.4),
-                            blurRadius: 20,
-                            spreadRadius: 1,
+                            blurRadius: 20, spreadRadius: 1,
                           ),
                         ],
                       ),
                       child: Icon(_iconForState(), color: Colors.white, size: 32),
                     ),
                     const SizedBox(height: 24),
-                    // Progress
                     if (_state == _State.downloading) ...[
                       SizedBox(
                         width: 260,
                         child: LinearProgressIndicator(
-                          value: _progress,
-                          minHeight: 6,
+                          value: _progress, minHeight: 6,
                           backgroundColor: Colors.white12,
                           color: const Color(0xFF5865F2),
                         ),
@@ -283,8 +250,7 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
                       const SizedBox(height: 8),
                       Text('${(_progress * 100).toStringAsFixed(0)}%',
                           style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                    ] else if (_state == _State.checking ||
-                        _state == _State.applying) ...[
+                    ] else if (_state == _State.checking || _state == _State.applying) ...[
                       const SizedBox(
                         width: 260,
                         child: LinearProgressIndicator(
@@ -297,7 +263,6 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
                       const SizedBox(height: 6),
                     ],
                     const SizedBox(height: 16),
-                    // Status text
                     Text(
                       _status,
                       textAlign: TextAlign.center,
@@ -307,24 +272,11 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
                       ),
                     ),
                     const SizedBox(height: 20),
-                    // Action button
                     if (_state == _State.upToDate || _state == _State.done)
                       FilledButton.icon(
-                        onPressed: _launch,
+                        onPressed: _launchAndExit,
                         icon: const Icon(Icons.play_arrow, size: 18),
                         label: const Text('Uygulamayı Başlat'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF5865F2),
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                        ),
-                      ),
-                    if (_state == _State.found)
-                      FilledButton.icon(
-                        onPressed: () {
-                          // İndirme _run() içinde otomatik başlıyor zaten
-                        },
-                        icon: const Icon(Icons.download, size: 18),
-                        label: const Text('İndiriliyor...'),
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFF5865F2),
                           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -342,20 +294,12 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
 
   IconData _iconForState() {
     switch (_state) {
-      case _State.checking:
-        return Icons.cloud_sync;
-      case _State.upToDate:
-        return Icons.check_circle;
-      case _State.found:
-        return Icons.system_update;
-      case _State.downloading:
-        return Icons.downloading;
-      case _State.applying:
-        return Icons.install_desktop;
-      case _State.done:
-        return Icons.check_circle;
-      case _State.error:
-        return Icons.error_outline;
+      case _State.checking: return Icons.cloud_sync;
+      case _State.upToDate: return Icons.check_circle;
+      case _State.downloading: return Icons.downloading;
+      case _State.applying: return Icons.install_desktop;
+      case _State.done: return Icons.check_circle;
+      case _State.error: return Icons.error_outline;
     }
   }
 
@@ -375,39 +319,51 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
   // ==================== GitHub ====================
 
   Future<_Release?> _fetchRelease() async {
-    final res = await http.get(
-      Uri.parse('https://api.github.com/repos/$githubOwner/$githubRepo/releases/latest'),
-      headers: {'Accept': 'application/vnd.github+json'},
-    ).timeout(const Duration(seconds: 10));
-    if (res.statusCode != 200) return null;
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    return _Release(
-      tagName: (data['tag_name'] ?? '') as String,
-      name: (data['name'] ?? '') as String,
-      draft: (data['draft'] as bool?) ?? false,
-      prerelease: (data['prerelease'] as bool?) ?? false,
-      assets: ((data['assets'] as List?) ?? const []).map((a) => _Asset(
-        name: (a['name'] ?? '') as String,
-        downloadUrl: (a['browser_download_url'] ?? '') as String,
-        size: (a['size'] as num?)?.toInt() ?? 0,
-      )).toList(),
-    );
+    final client = HttpClient();
+    try {
+      final req = await client.getUrl(
+          Uri.parse('https://api.github.com/repos/$githubOwner/$githubRepo/releases/latest'));
+      req.headers.set('Accept', 'application/vnd.github+json');
+      final res = await req.close().timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return null;
+      final data = jsonDecode(await res.transform(const SystemEncoding().decoder).join())
+          as Map<String, dynamic>;
+      return _Release(
+        tagName: (data['tag_name'] ?? '') as String,
+        name: (data['name'] ?? '') as String,
+        draft: (data['draft'] as bool?) ?? false,
+        prerelease: (data['prerelease'] as bool?) ?? false,
+        assets: ((data['assets'] as List?) ?? const []).map((a) => _Asset(
+          name: (a['name'] ?? '') as String,
+          downloadUrl: (a['browser_download_url'] ?? '') as String,
+          size: (a['size'] as num?)?.toInt() ?? 0,
+        )).toList(),
+      );
+    } finally {
+      client.close();
+    }
   }
 
   // ==================== Download ====================
 
-  Future<void> _download(String url, String dest, int total, void Function(double) onProgress) async {
-    final req = http.Request('GET', Uri.parse(url));
-    final res = await req.send().timeout(const Duration(seconds: 60));
-    if (res.statusCode != 200) throw Exception('İndirme hatası: HTTP ${res.statusCode}');
-    final sink = File(dest).openWrite();
-    int received = 0;
-    await for (final chunk in res.stream) {
-      sink.add(chunk);
-      received += chunk.length;
-      if (total > 0) onProgress(received / total);
+  Future<void> _download(
+      String url, String dest, int total, void Function(double) onProgress) async {
+    final client = HttpClient();
+    try {
+      final req = await client.getUrl(Uri.parse(url));
+      final res = await req.close().timeout(const Duration(seconds: 60));
+      if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
+      final sink = File(dest).openWrite();
+      int received = 0;
+      await for (final chunk in res) {
+        sink.add(chunk);
+        received += chunk.length;
+        if (total > 0) onProgress(received / total);
+      }
+      await sink.close();
+    } finally {
+      client.close();
     }
-    await sink.close();
   }
 
   // ==================== Extract & Apply ====================
@@ -417,7 +373,7 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
       '-NoProfile', '-Command',
       'Expand-Archive -Path "$zipPath" -DestinationPath "$destPath" -Force'
     ]);
-    if (result.exitCode != 0) throw Exception('Extract hatası: ${result.stderr}');
+    if (result.exitCode != 0) throw Exception('Extract: ${result.stderr}');
   }
 
   Future<void> _waitForAppExit() async {
@@ -435,7 +391,9 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
     try {
       final r = Process.runSync('tasklist', ['/FI', 'IMAGENAME eq $name', '/NH'], runInShell: false);
       return (r.stdout as String).toLowerCase().contains(name.toLowerCase());
-    } catch (_) { return false; }
+    } catch (_) {
+      return false;
+    }
   }
 
   void _copyRecursive(Directory src, String dest) {
@@ -462,7 +420,9 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
         if (l[i] < c[i]) return false;
       }
       return l[3] > c[3];
-    } catch (_) { return false; }
+    } catch (_) {
+      return false;
+    }
   }
 
   List<int> _parse(String v) {

@@ -134,24 +134,84 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
     try {
       if (_tunnel.running) {
         await _tunnel.stop();
+        return;
+      }
+
+      // Secret key kontrolü
+      final key = await Storage.getPlayitSecretKey();
+      if (key == null || key.isEmpty) {
+        final newKey = await _showSecretKeyDialog();
+        if (newKey == null || newKey.isEmpty) return;
+        await Storage.setPlayitSecretKey(newKey);
+        _tunnel.setSecretKey(newKey);
       } else {
-        final url = await _tunnel.start();
-        if (mounted) {
-          await Storage.upsertServer(SavedServer(
-            nickname: 'Public Tunnel (bu cihaz)',
-            host: url,
-            lastUsedAt: DateTime.now().millisecondsSinceEpoch,
-          ));
-          await _load();
-        }
+        _tunnel.setSecretKey(key);
+      }
+
+      final url = await _tunnel.start();
+      if (mounted) {
+        await Storage.upsertServer(SavedServer(
+          nickname: 'Public Tunnel (bu cihaz)',
+          host: url,
+          lastUsedAt: DateTime.now().millisecondsSinceEpoch,
+        ));
+        await _load();
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Tunnel hatası: $e')),
+          SnackBar(
+            content: Text('Tunnel hatası: $e'),
+            duration: const Duration(seconds: 5),
+          ),
         );
       }
     }
+  }
+
+  Future<String?> _showSecretKeyDialog() async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF36393F),
+        title: const Text('playit.gg Secret Key',
+            style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'https://playit.gg/account adresinden "Create Secret Key" ile key oluşturun.',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                hintText: 'key-xxxxxxxxxxxxxxxx',
+                hintStyle: TextStyle(color: Colors.white38),
+                isDense: true,
+                filled: true,
+                fillColor: Color(0xFF202225),
+                border: OutlineInputBorder(borderSide: BorderSide.none),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('İptal', style: TextStyle(color: Colors.white70)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF5865F2)),
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Bağlan'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

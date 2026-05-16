@@ -260,4 +260,17 @@ class Storage {
     final p = await SharedPreferences.getInstance();
     await p.setInt(_kLastUpdateCheck, timestamp);
   }
+
+  // playit.gg secret key
+  static const _kPlayitSecretKey = 'playit_secret_key';
+
+  static Future<String?> getPlayitSecretKey() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_kPlayitSecretKey);
+  }
+
+  static Future<void> setPlayitSecretKey(String key) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_kPlayitSecretKey, key);
+  }
 }
