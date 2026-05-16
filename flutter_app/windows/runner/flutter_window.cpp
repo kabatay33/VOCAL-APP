@@ -1,8 +1,10 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <string>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "input_injection.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -35,6 +37,28 @@ bool FlutterWindow::OnCreate() {
   // registered. The following call ensures a frame is pending to ensure the
   // window is shown. It is a no-op if the first frame hasn't completed yet.
   flutter_controller_->ForceRedraw();
+
+  // Input injection platform channel
+  flutter_controller_->engine()->GetRegistrarForPlugin("com.discord_clone/input");
+  input_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "com.discord_clone/input",
+      &flutter::StandardMethodCodec::GetInstance());
+  input_channel_->SetMethodCallHandler(
+      [](const flutter::MethodCall<flutter::EncodableValue>& call,
+         std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+        if (call.method_name() == "handleInput") {
+          // JSON string olarak gelen input event'i işle
+          if (call.arguments()) {
+            auto jsonStr = std::get<std::string>(*call.arguments());
+            input_injection::HandleInputEvent(jsonStr);
+            result->Success();
+          } else {
+            result->Error("invalid_args", "JSON string gerekli");
+          }
+        } else {
+          result->NotImplemented();
+        }
+      });
 
   return true;
 }

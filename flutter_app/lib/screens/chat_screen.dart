@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +14,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:window_manager/window_manager.dart';
 import '../api.dart';
 import '../config.dart';
+import '../input_manager.dart';
 import '../screen_share_options.dart';
 import '../sound_service.dart';
 import '../storage.dart';
@@ -74,6 +76,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _voice.setMyUserId(_auth.userId);
     _voice.onScreenStateChanged = _notifyScreenState;
     _voice.onCameraStateChanged = _notifyCameraState;
+    _voice.onInputEvent = (event) => InputManager.handleInputEvent(event);
     _voice.addListener(_onVoiceChanged);
     _connectWs();
     _loadShareOptions();
@@ -4650,6 +4653,16 @@ class _ScreenViewerDialogState extends State<_ScreenViewerDialog> {
   bool _controlsVisible = true;
   Timer? _hideTimer;
 
+  // Input control state
+  bool _inputModeActive = false;
+  // Odaklanan feed ekran paylaşımı mı? (kamera paylaşımına input gönderme)
+  bool get _focusedIsScreen {
+    if (_focusKey == null) return false;
+    return _focusKey!.endsWith(':screen');
+  }
+  // Kontrol edilebilir mi? (focused feed = başkasının ekran paylaşımı)
+  bool get _canControl => _focusedIsScreen;
+
   @override
   void initState() {
     super.initState();
@@ -4664,11 +4677,69 @@ class _ScreenViewerDialogState extends State<_ScreenViewerDialog> {
     if (_isFullscreen) {
       windowManager.setFullScreen(false);
     }
+    // Input mode'u kapat ve VoiceManager'a bildir
+    if (_inputModeActive) {
+      _inputModeActive = false;
+      widget.voice.setControllingPeer(null);
+    }
     super.dispose();
   }
 
   void _onVoiceChange() {
     if (mounted) setState(() {});
+  }
+
+  void _toggleInputMode() {
+    if (!_canControl) return;
+    setState(() {
+      _inputModeActive = !_inputModeActive;
+    });
+    if (_inputModeActive) {
+      // Focused screen'in userId'sini bul
+      final userIdStr = _focusKey?.split(':').first;
+      if (userIdStr != null) {
+        final userId = int.tryParse(userIdStr);
+        if (userId != null) {
+          widget.voice.setControllingPeer(userId);
+        }
+      }
+    } else {
+      widget.voice.setControllingPeer(null);
+    }
+  }
+
+  void _sendInputEvent(Map<String, dynamic> event) {
+    if (!_inputModeActive) return;
+    final userIdStr = _focusKey?.split(':').first;
+    if (userIdStr == null) return;
+    final userId = int.tryParse(userIdStr);
+    if (userId == null) return;
+    widget.voice.sendInputEvent(userId, event);
+  }
+
+  void _sendMouseEvent(String type, Offset localPos, int button) {
+    // Video renderer'ın gerçek pixel boyutlarını al
+    // localPos zaten video widget'ın koordinatlarında
+    _sendInputEvent({
+      'type': type,
+      'x': localPos.dx.round(),
+      'y': localPos.dy.round(),
+      if (type != 'mouse_move') 'button': button,
+    });
+  }
+
+  void _sendWheelEvent(Offset delta) {
+    _sendInputEvent({
+      'type': 'mouse_wheel',
+      'delta': delta.dy.round() * -120, // Windows wheel delta standardı
+    });
+  }
+
+  void _sendKeyEvent(String type, int keyCode) {
+    _sendInputEvent({
+      'type': type,
+      'keyCode': keyCode,
+    });
   }
 
   void _scheduleHide() {
@@ -4765,7 +4836,9 @@ class _ScreenViewerDialogState extends State<_ScreenViewerDialog> {
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.escape): () {
-          if (_isFullscreen) {
+          if (_inputModeActive) {
+            _toggleInputMode();
+          } else if (_isFullscreen) {
             _toggleFullscreen();
           } else {
             Navigator.of(context).pop();
@@ -4775,6 +4848,19 @@ class _ScreenViewerDialogState extends State<_ScreenViewerDialog> {
       },
       child: Focus(
         autofocus: true,
+        onKeyEvent: (node, event) {
+          if (_inputModeActive && _canControl) {
+            final key = event.logicalKey.keyId;
+            if (event is KeyDownEvent) {
+              _sendKeyEvent('key_down', key);
+              return KeyEventResult.handled;
+            } else if (event is KeyUpEvent) {
+              _sendKeyEvent('key_up', key);
+              return KeyEventResult.handled;
+            }
+          }
+          return KeyEventResult.ignored;
+        },
         child: Dialog(
           backgroundColor: Colors.black,
           insetPadding: EdgeInsets.all(_isFullscreen ? 0 : 16),
@@ -4790,11 +4876,42 @@ class _ScreenViewerDialogState extends State<_ScreenViewerDialog> {
                 // Arkaplan: video tüm alanı kaplar (boyutu küçülmez)
                 Container(
                   color: Colors.black,
-                  child: RTCVideoView(
-                    focused.renderer,
-                    objectFit: RTCVideoViewObjectFit
-                        .RTCVideoViewObjectFitContain,
-                  ),
+                  child: _inputModeActive
+                      ? Listener(
+                          onPointerDown: (e) {
+                            _sendMouseEvent('mouse_move', e.localPosition, 0);
+                            final btn = e.kind == PointerDeviceKind.touch ? 0
+                              : (e.buttons & 0x01) != 0 ? 0
+                              : (e.buttons & 0x02) != 0 ? 1 : 2;
+                            _sendMouseEvent('mouse_down', e.localPosition, btn);
+                          },
+                          onPointerUp: (e) {
+                            final btn = (e.buttons & 0x01) != 0 ? 0
+                              : (e.buttons & 0x02) != 0 ? 1 : 2;
+                            _sendMouseEvent('mouse_up', e.localPosition, btn);
+                          },
+                          onPointerMove: (e) {
+                            _sendMouseEvent('mouse_move', e.localPosition, 0);
+                          },
+                          onPointerSignal: (e) {
+                            if (e is PointerScrollEvent) {
+                              _sendWheelEvent(e.scrollDelta);
+                            }
+                          },
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.none,
+                            child: RTCVideoView(
+                              focused.renderer,
+                              objectFit: RTCVideoViewObjectFit
+                                  .RTCVideoViewObjectFitContain,
+                            ),
+                          ),
+                        )
+                      : RTCVideoView(
+                          focused.renderer,
+                          objectFit: RTCVideoViewObjectFit
+                              .RTCVideoViewObjectFitContain,
+                        ),
                 ),
 
                 // Üst kontrol bar — şeffaf overlay, fare hareketiyle açılıp 2sn sonra kapanır
@@ -4838,6 +4955,22 @@ class _ScreenViewerDialogState extends State<_ScreenViewerDialog> {
                                 ),
                               ),
                             ),
+                            // Input control toggle (ekran paylaşımı varsa göster)
+                            if (_canControl)
+                              IconButton(
+                                icon: Icon(
+                                  _inputModeActive
+                                      ? Icons.mouse
+                                      : Icons.mouse_outlined,
+                                  color: _inputModeActive
+                                      ? Colors.greenAccent
+                                      : Colors.white,
+                                ),
+                                tooltip: _inputModeActive
+                                    ? 'Uzaktan kontrol aktif (ESC ile kapat)'
+                                    : 'Uzaktan kontrolü başlat',
+                                onPressed: _toggleInputMode,
+                              ),
                             IconButton(
                               icon: Icon(
                                 _isFullscreen
@@ -4862,6 +4995,44 @@ class _ScreenViewerDialogState extends State<_ScreenViewerDialog> {
                     ),
                   ),
                 ),
+
+                // Input mode göstergesi (aktifken her zaman görünür)
+                if (_inputModeActive)
+                  Positioned(
+                    top: 56,
+                    left: 0,
+                    right: 0,
+                    child: IgnorePointer(
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.greenAccent.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                                color: Colors.greenAccent.withValues(alpha: 0.5)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.mouse,
+                                  color: Colors.greenAccent, size: 16),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Uzaktan kontrol aktif — ESC ile kapat',
+                                style: const TextStyle(
+                                  color: Colors.greenAccent,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
 
                 // Alt thumbnail bar (birden fazla paylaşım varsa) — yine overlay + fade
                 if (hasThumbnails)

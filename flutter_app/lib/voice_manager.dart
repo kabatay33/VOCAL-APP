@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'screen_share_options.dart';
@@ -13,6 +14,7 @@ class VoicePeer {
   MediaStream? remoteAudioStream;
   MediaStream? remoteScreenStream;
   MediaStream? remoteCameraStream;
+  RTCDataChannel? inputChannel; // uzaktan kontrol için data channel
   VoicePeer({required this.userId, required this.username, required this.pc});
 }
 
@@ -61,6 +63,9 @@ class VoiceManager extends ChangeNotifier {
   final Map<int, double> _audioLevels = {};
   Timer? _audioLevelTimer;
   static const double _speakingThreshold = 0.05;
+  // Input control: hangi peer'ın ekranını kontrol ediyoruz (userId)
+  // null = kontrol yok
+  int? _controllingPeerId;
 
   /// Backend'e "ekran paylaşımı başladı/bitti" sinyali için callback.
   /// ChatScreen tarafından set edilir.
@@ -68,6 +73,10 @@ class VoiceManager extends ChangeNotifier {
 
   /// Backend'e "kamera paylaşımı başladı/bitti" sinyali için callback.
   void Function(bool sharing)? onCameraStateChanged;
+
+  /// Uzaktan input event geldiğinde çağrılır (receiver tarafı).
+  /// payload: {type: 'mouse_move'|'mouse_down'|'mouse_up'|'mouse_wheel'|'key_down'|'key_up', ...}
+  void Function(Map<String, dynamic> payload)? onInputEvent;
 
   int? get currentChannelId => _currentChannelId;
   bool get inVoice => _currentChannelId != null;
@@ -886,6 +895,28 @@ class VoiceManager extends ChangeNotifier {
     final peer = VoicePeer(userId: userId, username: username, pc: pc);
     _peers[userId] = peer;
 
+    // Input control data channel (her peer için bir tane)
+    try {
+      final dc = await pc.createDataChannel(
+        'input',
+        RTCDataChannelInit()..ordered = true,
+      );
+      _attachInputHandler(dc, username);
+      peer.inputChannel = dc;
+      debugPrint('[VOICE] Input data channel oluşturuldu: $username');
+    } catch (e) {
+      debugPrint('[VOICE] Data channel oluşturulamadı ($username): $e');
+    }
+
+    // Karşı taraf data channel açarsa (answerer tarafı)
+    pc.onDataChannel = (RTCDataChannel channel) {
+      if (channel.label == 'input') {
+        _attachInputHandler(channel, username);
+        peer.inputChannel = channel;
+        debugPrint('[VOICE] Input data channel alındı: $username');
+      }
+    };
+
     pc.onIceCandidate = (RTCIceCandidate c) {
       _sendSignal(userId, {
         'kind': 'ice',
@@ -1046,6 +1077,43 @@ class VoiceManager extends ChangeNotifier {
     }
   }
 
+  /// Input data channel'e gelen mesajları dinle ve onInputEvent callback'ini çağır.
+  void _attachInputHandler(RTCDataChannel channel, String username) {
+    channel.onMessage = (RTCDataChannelMessage msg) {
+      final text = msg.text;
+      if (text != null) {
+        try {
+          final event = jsonDecode(text) as Map<String, dynamic>;
+          onInputEvent?.call(event);
+        } catch (e) {
+          debugPrint('[VOICE] Input event parse hatası ($username): $e');
+        }
+      }
+    };
+  }
+
+  /// Uzak peer'a input event gönder (fare/klavye).
+  /// Sadece ekran paylaşımı olan peer'a gönderir.
+  void sendInputEvent(int targetUserId, Map<String, dynamic> event) {
+    final peer = _peers[targetUserId];
+    if (peer == null) return;
+    final dc = peer.inputChannel;
+    if (dc == null || dc.state != RTCDataChannelState.RTCDataChannelOpen) return;
+    try {
+      dc.send(RTCDataChannelMessage(jsonEncode(event)));
+    } catch (e) {
+      debugPrint('[VOICE] Input event gönderilemedi ($targetUserId): $e');
+    }
+  }
+
+  /// Kontrol edilen peer'i ayarla (UI'dan çağrılır).
+  void setControllingPeer(int? userId) {
+    _controllingPeerId = userId;
+    notifyListeners();
+  }
+
+  int? get controllingPeerId => _controllingPeerId;
+
   /// Kanaldaki üye listesi güncellendiğinde çağrılır.
   /// Bizim olduğumuz kanaldaki listeden kaybolanların peer'ını kapatır.
   Future<void> syncMembers(int channelId, List<int> currentUserIds) async {
@@ -1062,7 +1130,11 @@ class VoiceManager extends ChangeNotifier {
     _cameraSenders.remove(userId);
     _peerStreamTypes.remove(userId);
     if (peer == null) return;
+    try {
+      peer.inputChannel?.close();
+    } catch (_) {}
     await peer.pc.close();
+    if (_controllingPeerId == userId) _controllingPeerId = null;
     notifyListeners();
   }
 

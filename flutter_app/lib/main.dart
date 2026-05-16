@@ -5,6 +5,7 @@ import 'package:window_manager/window_manager.dart';
 import 'api.dart';
 import 'backend_process_service.dart';
 import 'config.dart';
+import 'input_manager.dart';
 import 'screens/chat_screen.dart';
 import 'screens/login_screen.dart';
 import 'storage.dart';
@@ -32,6 +33,9 @@ Future<void> main() async {
   if (!kIsWeb && Platform.isWindows) {
     await BackendProcessService.instance.start();
   }
+
+  // Input injection manager'ı başlat (Windows native SendInput)
+  await InputManager.init();
 
   runApp(const App());
 }
