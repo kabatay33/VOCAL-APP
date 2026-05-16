@@ -32,6 +32,13 @@ Future<void> main() async {
   // port 3000 zaten kullanılıyorsa sessizce atlar (friend cihazları için)
   if (!kIsWeb && Platform.isWindows) {
     await BackendProcessService.instance.start();
+    // Backend port 3000'de hazır olana kadar bekle (max 10 sn)
+    final backendReady = await BackendProcessService.instance.waitForReady(timeoutSeconds: 10);
+    if (backendReady) {
+      debugPrint('[MAIN] Backend hazır — port 3000 aktif');
+    } else {
+      debugPrint('[MAIN] Backend hazır değil — splash ekranı bekleyecek');
+    }
   }
 
   // Input injection manager'ı başlat (Windows native SendInput)

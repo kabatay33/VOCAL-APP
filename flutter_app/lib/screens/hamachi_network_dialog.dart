@@ -6,7 +6,7 @@ import '../tunnel_service.dart';
 
 /// Sunucu yönetim paneli — kayıtlı sunucu listesi + Tunnel kontrolü.
 ///
-/// - Sol-üst: Public Tunnel paneli (playit.gg varsayılan, Cloudflare fallback)
+/// - Sol-üst: Public Tunnel paneli (playit.gg)
 /// - Alt: kayıtlı sunucu listesi (ekle/test et/bağlan/sil)
 /// - Tunnel açıldıysa public URL otomatik olarak listeye eklenir
 class HamachiNetworkDialog extends StatefulWidget {
@@ -135,13 +135,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
       if (_tunnel.running) {
         await _tunnel.stop();
       } else {
-        // playit.gg dene, başarısız olursa Cloudflare fallback
-        String url;
-        try {
-          url = await _tunnel.start(provider: TunnelProvider.playit);
-        } catch (_) {
-          url = await _tunnel.start(provider: TunnelProvider.cloudflare);
-        }
+        final url = await _tunnel.start();
         if (mounted) {
           await Storage.upsertServer(SavedServer(
             nickname: 'Public Tunnel (bu cihaz)',
@@ -222,18 +216,13 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
   }
 
   /// Public Tunnel paneli — host PC backend'ini public URL'e açar.
-  /// Varsayılan: playit.gg (ücretsiz, WebSocket destekli).
-  /// Fallback: Cloudflare Tunnel (playit başarısız olursa).
+  /// playit.gg: Ücretsiz, WebSocket destekli.
   Widget _tunnelPanel() {
     final running = _tunnel.running;
     final starting = _tunnel.starting;
     final url = _tunnel.publicUrl;
     final statusMsg = _tunnel.statusMessage;
-    final provider = _tunnel.provider;
-    final isPlayit = provider == TunnelProvider.playit;
-    final accentColor = isPlayit
-        ? const Color(0xFF00D4AA)
-        : const Color(0xFFF38020);
+    const accentColor = Color(0xFF00D4AA);
 
     return Container(
       color: const Color(0xFF1F2126),
@@ -276,8 +265,8 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
                             color: accentColor.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(3),
                           ),
-                          child: Text(
-                            isPlayit ? 'playit.gg' : 'Cloudflare',
+                          child: const Text(
+                            'playit.gg',
                             style: TextStyle(
                               color: accentColor,
                               fontSize: 9,
@@ -291,7 +280,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
                     const SizedBox(height: 2),
                     Text(
                       running
-                          ? '${isPlayit ? "playit.gg" : "Cloudflare"} üzerinden — arkadaşların bu URL ile bağlanır'
+                          ? 'playit.gg üzerinden — arkadaşların bu URL ile bağlanır'
                           : 'Bu cihaz host ise tıkla, arkadaşlarına paylaşacağın public URL alırsın',
                       style: const TextStyle(
                           color: Colors.white60, fontSize: 11),
@@ -684,11 +673,11 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
                 style: const TextStyle(color: Colors.white),
                 keyboardType: TextInputType.url,
                 decoration: _input(
-                    hint: 'https://xxx.playit.gg veya trycloudflare.com'),
+                    hint: 'https://xxx.playit.gg'),
               ),
               const SizedBox(height: 4),
               const Text(
-                'Arkadaşının paylaştığı Tunnel URL\'ini yapıştır (playit.gg veya Cloudflare).',
+                'Arkadaşının paylaştığı Tunnel URL\'ini yapıştır (playit.gg).',
                 style: TextStyle(color: Colors.white38, fontSize: 11),
               ),
               const SizedBox(height: 14),

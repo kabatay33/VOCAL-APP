@@ -51,8 +51,7 @@ if (-not (Test-Path $releaseDir)) {
   exit 1
 }
 
-# 3) Tunnel binary'lerini release output'a kopyala
-# playit.gg (varsayılan tunnel)
+# 3) playit.exe kopyala
 $playitSrc = Join-Path $projectRoot "flutter_app\windows\tunnel_native\playit\playit.exe"
 $playitDst = Join-Path $releaseDir "playit.exe"
 if (Test-Path $playitSrc) {
@@ -62,17 +61,7 @@ if (Test-Path $playitSrc) {
   Write-Warning "playit.exe bulunamadı: $playitSrc"
 }
 
-# Cloudflare Tunnel (fallback)
-$cloudflaredSrc = Join-Path $projectRoot "flutter_app\windows\tunnel_native\cloudflared\cloudflared.exe"
-$cloudflaredDst = Join-Path $releaseDir "cloudflared.exe"
-if (Test-Path $cloudflaredSrc) {
-  Copy-Item -Path $cloudflaredSrc -Destination $cloudflaredDst -Force
-  Write-Host "cloudflared.exe kopyalandı"
-} else {
-  Write-Warning "cloudflared.exe bulunamadı: $cloudflaredSrc"
-}
-
-# Updater'ı kopyala
+# 4) Updater'ı kopyala
 $updaterSrc = Join-Path $projectRoot "updater\updater.exe"
 $updaterDst = Join-Path $releaseDir "updater.exe"
 if (Test-Path $updaterSrc) {
@@ -82,21 +71,25 @@ if (Test-Path $updaterSrc) {
   Write-Warning "updater.exe bulunamadı: $updaterSrc"
 }
 
-# 4) Zip olustur
+# 5) version.txt yaz
+Set-Content -Path "$releaseDir\version.txt" -Value "$Version" -NoNewline
+Write-Host "version.txt: $Version"
+
+# 6) Zip olustur
 Write-Host "`nZip olusturuluyor: $zipOut"
 if (Test-Path $zipOut) { Remove-Item $zipOut -Force }
 Compress-Archive -Path "$releaseDir\*" -DestinationPath $zipOut -Force
 $zipSize = [math]::Round((Get-Item $zipOut).Length / 1MB, 2)
 Write-Host "Zip hazir: $zipSize MB"
 
-# 5) GitHub release olustur
+# 7) GitHub release olustur
 Write-Host "`nGitHub Release olusturuluyor: v$Version"
 $ghArgs = @(
   'release', 'create',
   "v$Version",
   $zipOut,
   '--title', "VOCAL-APP v$Version",
-  '--notes', "VOCAL-APP v$Version`n`nYenilikler:`n- Updater programi (ayri CLI - surum kontrolu + otomatik guncelleme)`n- Backend hazir oluncaya kadar splash ekrani`n- playit.gg tunnel destegi`n- Uzaktan ekran kontrolu (input injection)"
+  '--notes', "VOCAL-APP v$Version`n`nYenilikler:`n- Updater GUI programi (Flutter pencere)`n- Cloudflare kaldirildi, sadece playit.gg`n- Backend hazir olunca splash ekrani`n- Update loop duzeltmesi"
 )
 
 & gh @ghArgs

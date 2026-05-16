@@ -82,6 +82,17 @@ class BackendProcessService {
     }
   }
 
+  /// Backend'in port 3000'de hazır olmasını bekle.
+  /// [timeout] kadar saniye bekler, hazır olursa true döner.
+  Future<bool> waitForReady({int timeoutSeconds = 10}) async {
+    final deadline = DateTime.now().add(Duration(seconds: timeoutSeconds));
+    while (DateTime.now().isBefore(deadline)) {
+      if (await _isPort3000InUse()) return true;
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
+    return false;
+  }
+
   /// Backend'i kapat. Pencere kapatma / tray çıkış sırasında çağrılır.
   Future<void> stop() async {
     final p = _process;
