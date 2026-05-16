@@ -1,0 +1,41 @@
+# Flutter / Dart
+flutter_app/.dart_tool/
+flutter_app/.flutter-plugins
+flutter_app/.flutter-plugins-dependencies
+flutter_app/.packages
+flutter_app/.pub-cache/
+flutter_app/.pub/
+flutter_app/build/
+flutter_app/ephemeral/
+flutter_app/.idea/
+flutter_app/*.iml
+flutter_app/.metadata
+flutter_app/pubspec.lock
+flutter_app/windows/flutter/ephemeral/
+flutter_app/windows/runner/Flutter/
+
+# Not: cloudflared.exe (51 MB) git'e dahil — proje çalışması için gerekli.
+# GitHub'ın 100MB/file limitinin altında.
+
+# Backend
+backend/node_modules/
+backend/data.db
+backend/data.db-shm
+backend/data.db-wal
+backend/uploads/
+backend/releases/
+backend/.env
+
+# Test artifacts
+test_install_v100/
+
+# IDE/OS
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.log
+
+# WASAPI debug
+flutter_app/wasapi_debug.log
+**/wasapi_debug.log
