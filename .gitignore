@@ -29,6 +29,9 @@ backend/.env
 # Test artifacts
 test_install_v100/
 
+# Release zip'leri GitHub Releases'e yüklenir, repo'da tutmaya gerek yok
+dist/
+
 # IDE/OS
 .vscode/
 .DS_Store

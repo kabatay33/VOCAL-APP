@@ -239,9 +239,18 @@ class UpdaterService {
       );
       await File(scriptPath).writeAsString(script);
 
+      // PowerShell'i cmd start /B üzerinden arka planda başlat — Windows'un
+      // native asenkron başlatması, app exit ettikten sonra da yaşar.
+      // Detached spawn modunun bazı Windows sürümlerinde child process'i
+      // hemen öldürmesi sorununu önler.
       await Process.start(
-        'powershell',
+        'cmd',
         [
+          '/c',
+          'start',
+          '""', // pencere başlığı (boş)
+          '/B', // arka plan, yeni konsol penceresi açma
+          'powershell',
           '-NoProfile',
           '-ExecutionPolicy',
           'Bypass',
@@ -251,9 +260,11 @@ class UpdaterService {
           scriptPath,
         ],
         mode: ProcessStartMode.detached,
+        runInShell: false,
       );
 
-      await Future.delayed(const Duration(milliseconds: 500));
+      // PowerShell'in başlamasına biraz zaman tanı, sonra app'i kapat
+      await Future.delayed(const Duration(seconds: 2));
       exit(0);
     } catch (e) {
       _downloading = false;
