@@ -1080,14 +1080,11 @@ class VoiceManager extends ChangeNotifier {
   /// Input data channel'e gelen mesajları dinle ve onInputEvent callback'ini çağır.
   void _attachInputHandler(RTCDataChannel channel, String username) {
     channel.onMessage = (RTCDataChannelMessage msg) {
-      final text = msg.text;
-      if (text != null) {
-        try {
-          final event = jsonDecode(text) as Map<String, dynamic>;
-          onInputEvent?.call(event);
-        } catch (e) {
-          debugPrint('[VOICE] Input event parse hatası ($username): $e');
-        }
+      try {
+        final event = jsonDecode(msg.text) as Map<String, dynamic>;
+        onInputEvent?.call(event);
+      } catch (e) {
+        debugPrint('[VOICE] Input event parse hatası ($username): $e');
       }
     };
   }

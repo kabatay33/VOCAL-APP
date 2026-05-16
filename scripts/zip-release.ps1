@@ -10,7 +10,17 @@ $zipOut = Join-Path $distDir "VOCAL-APP-$Version.zip"
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 
-# cloudflared.exe'yi kopyala
+# playit.exe'yi kopyala (varsayılan tunnel)
+$playitSrc = Join-Path $projectRoot "flutter_app\windows\tunnel_native\playit\playit.exe"
+$playitDst = Join-Path $releaseDir "playit.exe"
+if (Test-Path $playitSrc) {
+    Copy-Item -Path $playitSrc -Destination $playitDst -Force
+    Write-Host "playit.exe kopyalandı"
+} else {
+    Write-Warning "playit.exe bulunamadı: $playitSrc"
+}
+
+# cloudflared.exe'yi kopyala (fallback)
 $cloudflaredSrc = Join-Path $projectRoot "flutter_app\windows\tunnel_native\cloudflared\cloudflared.exe"
 $cloudflaredDst = Join-Path $releaseDir "cloudflared.exe"
 if (Test-Path $cloudflaredSrc) {

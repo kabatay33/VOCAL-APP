@@ -4,9 +4,9 @@ import '../api.dart';
 import '../storage.dart';
 import '../tunnel_service.dart';
 
-/// Sunucu yönetim paneli — kayıtlı sunucu listesi + Cloudflare Tunnel kontrolü.
+/// Sunucu yönetim paneli — kayıtlı sunucu listesi + Tunnel kontrolü.
 ///
-/// - Sol-üst: Cloudflare Public Tunnel paneli (host PC için)
+/// - Sol-üst: Public Tunnel paneli (playit.gg varsayılan, Cloudflare fallback)
 /// - Alt: kayıtlı sunucu listesi (ekle/test et/bağlan/sil)
 /// - Tunnel açıldıysa public URL otomatik olarak listeye eklenir
 class HamachiNetworkDialog extends StatefulWidget {
@@ -135,7 +135,13 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
       if (_tunnel.running) {
         await _tunnel.stop();
       } else {
-        final url = await _tunnel.start();
+        // playit.gg dene, başarısız olursa Cloudflare fallback
+        String url;
+        try {
+          url = await _tunnel.start(provider: TunnelProvider.playit);
+        } catch (_) {
+          url = await _tunnel.start(provider: TunnelProvider.cloudflare);
+        }
         if (mounted) {
           await Storage.upsertServer(SavedServer(
             nickname: 'Public Tunnel (bu cihaz)',
@@ -215,13 +221,19 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
     );
   }
 
-  /// Cloudflare Tunnel paneli — host PC backend'ini public URL'e açar.
-  /// Bu cihaz host ise tıklayıp public URL alır, arkadaşlarına gönderir.
+  /// Public Tunnel paneli — host PC backend'ini public URL'e açar.
+  /// Varsayılan: playit.gg (ücretsiz, WebSocket destekli).
+  /// Fallback: Cloudflare Tunnel (playit başarısız olursa).
   Widget _tunnelPanel() {
     final running = _tunnel.running;
     final starting = _tunnel.starting;
     final url = _tunnel.publicUrl;
     final statusMsg = _tunnel.statusMessage;
+    final provider = _tunnel.provider;
+    final isPlayit = provider == TunnelProvider.playit;
+    final accentColor = isPlayit
+        ? const Color(0xFF00D4AA)
+        : const Color(0xFFF38020);
 
     return Container(
       color: const Color(0xFF1F2126),
@@ -233,7 +245,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
             children: [
               Icon(
                 running ? Icons.cloud_done : Icons.cloud_outlined,
-                color: running ? const Color(0xFFF38020) : Colors.white54,
+                color: running ? accentColor : Colors.white54,
                 size: 22,
               ),
               const SizedBox(width: 10),
@@ -242,24 +254,44 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      running
-                          ? 'Public Tunnel AÇIK'
-                          : starting
-                              ? 'Tunnel başlatılıyor...'
-                              : 'Public Tunnel Kapalı',
-                      style: TextStyle(
-                        color: running
-                            ? const Color(0xFFF38020)
-                            : Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          running
+                              ? 'Public Tunnel AÇIK'
+                              : starting
+                                  ? 'Tunnel başlatılıyor...'
+                                  : 'Public Tunnel Kapalı',
+                          style: TextStyle(
+                            color: running ? accentColor : Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: accentColor.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            isPlayit ? 'playit.gg' : 'Cloudflare',
+                            style: TextStyle(
+                              color: accentColor,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 2),
                     Text(
                       running
-                          ? 'Cloudflare üzerinden — arkadaşların bu URL ile bağlanır'
+                          ? '${isPlayit ? "playit.gg" : "Cloudflare"} üzerinden — arkadaşların bu URL ile bağlanır'
                           : 'Bu cihaz host ise tıkla, arkadaşlarına paylaşacağın public URL alırsın',
                       style: const TextStyle(
                           color: Colors.white60, fontSize: 11),
@@ -294,7 +326,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
                 style: FilledButton.styleFrom(
                   backgroundColor: running
                       ? const Color(0xFF4F545C)
-                      : const Color(0xFFF38020),
+                      : accentColor,
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 8),
                 ),
@@ -311,12 +343,12 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
                 color: const Color(0xFF202225),
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(
-                    color: const Color(0xFFF38020).withValues(alpha: 0.5)),
+                    color: accentColor.withValues(alpha: 0.5)),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.link,
-                      size: 14, color: Color(0xFFF38020)),
+                  Icon(Icons.link,
+                      size: 14, color: accentColor),
                   const SizedBox(width: 6),
                   Expanded(
                     child: SelectableText(
@@ -652,11 +684,11 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
                 style: const TextStyle(color: Colors.white),
                 keyboardType: TextInputType.url,
                 decoration: _input(
-                    hint: 'https://random.trycloudflare.com'),
+                    hint: 'https://xxx.playit.gg veya trycloudflare.com'),
               ),
               const SizedBox(height: 4),
               const Text(
-                'Arkadaşının paylaştığı Cloudflare Tunnel URL\'ini yapıştır.',
+                'Arkadaşının paylaştığı Tunnel URL\'ini yapıştır (playit.gg veya Cloudflare).',
                 style: TextStyle(color: Colors.white38, fontSize: 11),
               ),
               const SizedBox(height: 14),

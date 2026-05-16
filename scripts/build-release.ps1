@@ -51,8 +51,18 @@ if (-not (Test-Path $releaseDir)) {
   exit 1
 }
 
-# 3) Zip olustur
-# cloudflared.exe'yi release output'a kopyala
+# 3) Tunnel binary'lerini release output'a kopyala
+# playit.gg (varsayılan tunnel)
+$playitSrc = Join-Path $projectRoot "flutter_app\windows\tunnel_native\playit\playit.exe"
+$playitDst = Join-Path $releaseDir "playit.exe"
+if (Test-Path $playitSrc) {
+  Copy-Item -Path $playitSrc -Destination $playitDst -Force
+  Write-Host "playit.exe kopyalandı"
+} else {
+  Write-Warning "playit.exe bulunamadı: $playitSrc"
+}
+
+# Cloudflare Tunnel (fallback)
 $cloudflaredSrc = Join-Path $projectRoot "flutter_app\windows\tunnel_native\cloudflared\cloudflared.exe"
 $cloudflaredDst = Join-Path $releaseDir "cloudflared.exe"
 if (Test-Path $cloudflaredSrc) {
@@ -75,7 +85,7 @@ $ghArgs = @(
   "v$Version",
   $zipOut,
   '--title', "VOCAL-APP v$Version",
-  '--notes', "VOCAL-APP v$Version`n`nYenilikler:`n- Uzaktan ekran kontrolu (input injection)`n- WebRTC data channel uzerinden fare/klavye gonderme`n- Windows SendInput API entegrasyonu`n- ESC ile input mode kapatma"
+  '--notes', "VOCAL-APP v$Version`n`nYenilikler:`n- playit.gg tunnel destegi (varsayılan, Cloudflare fallback)`n- Uzaktan ekran kontrolu (input injection)`n- WebRTC data channel uzerinden fare/klavye gonderme`n- Windows SendInput API entegrasyonu`n- ESC ile input mode kapatma"
 )
 
 & gh @ghArgs
