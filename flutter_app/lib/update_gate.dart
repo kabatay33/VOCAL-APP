@@ -1,20 +1,22 @@
-/// Uygulama açılış kapısı — Updater splash.
+/// Uygulama açılış kapısı — Backend hazır bekleyen splash.
 ///
 /// Akış:
-///   1) Backend ulaşılabilir mi diye 3 sn'lik retry-pinger çalıştırır.
-///   2) Manifest'i çeker.
-///   3) Yeni sürüm varsa otomatik indir → PowerShell update script çalıştırır
-///      → app exit(0) yapar.
-///   4) Yoksa, hata olursa veya backend ulaşılamıyorsa → normal Bootstrap'e geç.
+///   1) BackendProcessService zaten main()'de başlatılmış olabilir.
+///   2) Port 3000 dinleniyor mu kontrol et (backend hazır mı?)
+///   3) Hazır değilse bekle (max 15 sn), arada durum göster.
+///   4) Hazır veya timeout → Bootstrap'a geç.
 ///
-/// Splash UI: Discord renkleri, logo, durum text + opsiyonel progress bar.
+/// Not: Güncelleme kontrolü artık updater.exe tarafından yapılıyor.
+/// Updater güncelleme bittikten sonra discord_clone.exe'yi başlatıyor.
+/// Bu splash sadece backend'in hazır olmasını bekliyor.
+
 library;
 
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'main.dart' show Bootstrap;
 import 'storage.dart';
-import 'updater_service.dart';
 
 class UpdateGate extends StatefulWidget {
   const UpdateGate({super.key});
@@ -25,9 +27,7 @@ class UpdateGate extends StatefulWidget {
 
 class _UpdateGateState extends State<UpdateGate> {
   String _status = 'Hazırlanıyor...';
-  double? _progress; // null = indeterminate, 0..1 = determinate
-  bool _showCancel = false;
-  bool _proceeded = false; // _proceedToApp birden fazla çağrılmasın
+  bool _proceeded = false;
 
   @override
   void initState() {
@@ -37,55 +37,50 @@ class _UpdateGateState extends State<UpdateGate> {
 
   Future<void> _run() async {
     try {
-      // 1) Kayıtlı sunucu var mı? Yoksa update kontrolü atla
+      // Kayıtlı sunucu var mı?
       final host = await Storage.getServerHost();
       if (host == null || host.trim().isEmpty) {
-        _setStatus('Sunucu ayarlı değil — atlanıyor');
+        _setStatus('Sunucu ayarlı değil — bekleniyor...');
+        // Sunucu ayarlanmamışsa backend'e gerek yok, direkt git
+        await Future.delayed(const Duration(milliseconds: 800));
+        _proceedToApp();
+        return;
+      }
+
+      // Backend hazır mı kontrol et
+      _setStatus('Sunucu başlatılıyor...');
+
+      // Önce port 3000'i kontrol et (zaten çalışıyor olabilir)
+      if (await _isPort3000Ready()) {
+        _setStatus('Sunucu hazır!');
         await Future.delayed(const Duration(milliseconds: 400));
         _proceedToApp();
         return;
       }
 
-      // 1.5) Son güncelleme zamanını kontrol et — 1 saat içinde yapıldıysa atla
-      final lastUpdate = await Storage.getLastUpdateCheck();
-      final now = DateTime.now().millisecondsSinceEpoch;
-      if (lastUpdate != null && (now - lastUpdate) < 3600000) {
-        _setStatus('Güncelleme yakın zamanda yapıldı — atlanıyor');
-        await Future.delayed(const Duration(milliseconds: 400));
-        _proceedToApp();
-        return;
+      // Backend'in hazır olmasını bekle (max 15 sn)
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (DateTime.now().isBefore(deadline)) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (!mounted) return;
+
+        if (await _isPort3000Ready()) {
+          _setStatus('Sunucu hazır!');
+          await Future.delayed(const Duration(milliseconds: 400));
+          _proceedToApp();
+          return;
+        }
+
+        final elapsed = 15 - deadline.difference(DateTime.now()).inSeconds;
+        _setStatus('Sunucu başlatılıyor... (${elapsed}s)');
       }
 
-      // 2) GitHub'dan güncelleme kontrolü
-      _setStatus('Güncelleme kontrolü...');
-      _showCancelAfter(const Duration(seconds: 5));
-      final result = await UpdaterService.instance
-          .checkForUpdate()
-          .timeout(const Duration(seconds: 10));
-
-      // Kontrol zamanını kaydet
-      await Storage.setLastUpdateCheck(now);
-
-      if (!result.hasUpdate) {
-        _setStatus('Güncel: ${result.currentVersion}');
-        await Future.delayed(const Duration(milliseconds: 300));
-        _proceedToApp();
-        return;
-      }
-
-      // 3) Yeni sürüm var → otomatik indir + uygula
-      _setStatus(
-          'Yeni sürüm bulundu: ${result.latestVersion}\nİndiriliyor...');
-      setState(() => _progress = 0);
-      await UpdaterService.instance.downloadAndApply(
-        result.release,
-        onProgress: (p) {
-          if (mounted) setState(() => _progress = p);
-        },
-      );
-      // downloadAndApply içinde exit(0) — buraya gelmemeli
+      // Timeout — yine de devam et (backend manuel açılabilir)
+      _setStatus('Sunucu bekleniyor... (devam ediliyor)');
+      await Future.delayed(const Duration(milliseconds: 600));
+      _proceedToApp();
     } catch (e) {
-      _setStatus('Güncelleme atlandı: $e');
+      _setStatus('Hata: $e — devam ediliyor');
       await Future.delayed(const Duration(milliseconds: 800));
       _proceedToApp();
     }
@@ -95,10 +90,15 @@ class _UpdateGateState extends State<UpdateGate> {
     if (mounted) setState(() => _status = s);
   }
 
-  void _showCancelAfter(Duration d) {
-    Timer(d, () {
-      if (mounted) setState(() => _showCancel = true);
-    });
+  Future<bool> _isPort3000Ready() async {
+    try {
+      final socket = await Socket.connect('127.0.0.1', 3000,
+          timeout: const Duration(seconds: 1));
+      await socket.close();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   void _proceedToApp() {
@@ -146,14 +146,12 @@ class _UpdateGateState extends State<UpdateGate> {
                 ),
               ),
               const SizedBox(height: 24),
-              // İlerleme göstergesi
-              SizedBox(
+              const SizedBox(
                 width: 280,
                 child: LinearProgressIndicator(
-                  value: _progress,
                   minHeight: 4,
                   backgroundColor: Colors.white12,
-                  color: const Color(0xFF5865F2),
+                  color: Color(0xFF5865F2),
                 ),
               ),
               const SizedBox(height: 16),
@@ -166,26 +164,14 @@ class _UpdateGateState extends State<UpdateGate> {
                       const TextStyle(color: Colors.white70, fontSize: 13),
                 ),
               ),
-              if (_progress != null && _progress! > 0) ...[
-                const SizedBox(height: 6),
-                Text(
-                  '${(_progress! * 100).toStringAsFixed(0)}%',
-                  style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 11,
-                      fontFamily: 'monospace'),
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: _proceedToApp,
+                child: const Text(
+                  'Atla ve devam et',
+                  style: TextStyle(color: Colors.white38, fontSize: 12),
                 ),
-              ],
-              if (_showCancel && _progress == null) ...[
-                const SizedBox(height: 16),
-                TextButton(
-                  onPressed: _proceedToApp,
-                  child: const Text(
-                    'Atla ve devam et',
-                    style: TextStyle(color: Colors.white38, fontSize: 12),
-                  ),
-                ),
-              ],
+              ),
             ],
           ),
         ),

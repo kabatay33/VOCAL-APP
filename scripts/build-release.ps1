@@ -72,20 +72,31 @@ if (Test-Path $cloudflaredSrc) {
   Write-Warning "cloudflared.exe bulunamadı: $cloudflaredSrc"
 }
 
+# Updater'ı kopyala
+$updaterSrc = Join-Path $projectRoot "updater\updater.exe"
+$updaterDst = Join-Path $releaseDir "updater.exe"
+if (Test-Path $updaterSrc) {
+  Copy-Item -Path $updaterSrc -Destination $updaterDst -Force
+  Write-Host "updater.exe kopyalandı"
+} else {
+  Write-Warning "updater.exe bulunamadı: $updaterSrc"
+}
+
+# 4) Zip olustur
 Write-Host "`nZip olusturuluyor: $zipOut"
 if (Test-Path $zipOut) { Remove-Item $zipOut -Force }
 Compress-Archive -Path "$releaseDir\*" -DestinationPath $zipOut -Force
 $zipSize = [math]::Round((Get-Item $zipOut).Length / 1MB, 2)
 Write-Host "Zip hazir: $zipSize MB"
 
-# 4) GitHub release olustur
+# 5) GitHub release olustur
 Write-Host "`nGitHub Release olusturuluyor: v$Version"
 $ghArgs = @(
   'release', 'create',
   "v$Version",
   $zipOut,
   '--title', "VOCAL-APP v$Version",
-  '--notes', "VOCAL-APP v$Version`n`nYenilikler:`n- playit.gg tunnel destegi (varsayılan, Cloudflare fallback)`n- Uzaktan ekran kontrolu (input injection)`n- WebRTC data channel uzerinden fare/klavye gonderme`n- Windows SendInput API entegrasyonu`n- ESC ile input mode kapatma"
+  '--notes', "VOCAL-APP v$Version`n`nYenilikler:`n- Updater programi (ayri CLI - surum kontrolu + otomatik guncelleme)`n- Backend hazir oluncaya kadar splash ekrani`n- playit.gg tunnel destegi`n- Uzaktan ekran kontrolu (input injection)"
 )
 
 & gh @ghArgs

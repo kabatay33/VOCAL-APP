@@ -8,7 +8,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:intl/intl.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:window_manager/window_manager.dart';
@@ -18,7 +17,6 @@ import '../input_manager.dart';
 import '../screen_share_options.dart';
 import '../sound_service.dart';
 import '../storage.dart';
-import '../updater_service.dart';
 import '../voice_manager.dart';
 import '../widgets/user_avatar.dart';
 import 'login_screen.dart';
@@ -4283,7 +4281,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           const SizedBox(height: 20),
           _label('UYGULAMA SÜRÜMÜ'),
           const SizedBox(height: 8),
-          _UpdateCheckRow(),
+          _label('Güncelleme için updater.exe kullanın'),
         ],
       ),
     );
@@ -5361,225 +5359,3 @@ class _VideoFeed {
   });
 }
 
-/// Settings dialog Hesap sekmesinde "Güncellemeleri Kontrol Et" satırı.
-/// Mevcut sürümü gösterir, butonla manifest çeker, yeni sürüm varsa
-/// kullanıcıya onay diyaloğu sunar, onaylanırsa indirip uygular.
-class _UpdateCheckRow extends StatefulWidget {
-  @override
-  State<_UpdateCheckRow> createState() => _UpdateCheckRowState();
-}
-
-class _UpdateCheckRowState extends State<_UpdateCheckRow> {
-  bool _checking = false;
-  String? _currentVersion;
-  String? _resultMsg;
-  bool _resultIsError = false;
-  bool _downloading = false;
-  double _progress = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadVersion();
-  }
-
-  Future<void> _loadVersion() async {
-    try {
-      final info = await PackageInfo.fromPlatform();
-      if (mounted) setState(() => _currentVersion = info.version);
-    } catch (_) {}
-  }
-
-  Future<void> _check() async {
-    if (_checking || _downloading) return;
-    setState(() {
-      _checking = true;
-      _resultMsg = null;
-      _resultIsError = false;
-    });
-    try {
-      final result = await UpdaterService.instance.checkForUpdate();
-      if (!mounted) return;
-      if (!result.hasUpdate) {
-        setState(() {
-          _resultMsg =
-              'Güncel sürüm — ${result.currentVersion} (en yeni ${result.latestVersion})';
-          _resultIsError = false;
-        });
-        return;
-      }
-      // Yeni sürüm var — onay diyaloğu
-      final approve = await _showUpdateDialog(result);
-      if (approve != true) {
-        setState(() {
-          _resultMsg = 'Güncelleme ertelendi';
-          _resultIsError = false;
-        });
-        return;
-      }
-      setState(() {
-        _downloading = true;
-        _progress = 0;
-        _resultMsg = 'İndiriliyor...';
-      });
-      await UpdaterService.instance.downloadAndApply(
-        result.release,
-        onProgress: (p) {
-          if (mounted) setState(() => _progress = p);
-        },
-      );
-      // downloadAndApply içinde exit(0) çağırılıyor — buraya gelmemeli
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _resultMsg = 'Hata: $e';
-          _resultIsError = true;
-          _downloading = false;
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _checking = false);
-    }
-  }
-
-  Future<bool?> _showUpdateDialog(UpdateCheckResult r) {
-    return showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF36393F),
-        title: Row(
-          children: [
-            const Icon(Icons.system_update,
-                color: Color(0xFF5865F2), size: 22),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text('Yeni Sürüm: ${r.latestVersion}',
-                  style: const TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Mevcut sürüm: ${r.currentVersion}',
-                  style: const TextStyle(
-                      color: Colors.white54, fontSize: 12)),
-              const SizedBox(height: 12),
-              if (r.release.body.isNotEmpty) ...[
-                const Text('Yenilikler:',
-                    style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                Container(
-                  constraints: const BoxConstraints(maxHeight: 200),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF202225),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: SingleChildScrollView(
-                    child: Text(r.release.body,
-                        style: const TextStyle(
-                            color: Colors.white70, fontSize: 12)),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 12),
-              const Text(
-                'Güncelleme indirilince uygulama otomatik yeniden başlatılır.',
-                style: TextStyle(color: Colors.white38, fontSize: 11),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Daha Sonra',
-                style: TextStyle(color: Colors.white70)),
-          ),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF5865F2)),
-            icon: const Icon(Icons.download, size: 16),
-            label: const Text('Şimdi Güncelle'),
-            onPressed: () => Navigator.pop(ctx, true),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF202225),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.info_outline,
-              color: Color(0xFF5865F2), size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Sürüm: ${_currentVersion ?? '—'}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                if (_resultMsg != null)
-                  Text(
-                    _resultMsg!,
-                    style: TextStyle(
-                      color: _resultIsError
-                          ? Colors.redAccent
-                          : Colors.white54,
-                      fontSize: 11,
-                    ),
-                  ),
-                if (_downloading)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: LinearProgressIndicator(
-                      value: _progress > 0 ? _progress : null,
-                      backgroundColor: Colors.white12,
-                      color: const Color(0xFF5865F2),
-                      minHeight: 4,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.white,
-              side: const BorderSide(color: Colors.white24),
-            ),
-            icon: _checking
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white54))
-                : const Icon(Icons.refresh, size: 16),
-            label: const Text('Güncelleme Kontrol Et'),
-            onPressed: (_checking || _downloading) ? null : _check,
-          ),
-        ],
-      ),
-    );
-  }
-}
