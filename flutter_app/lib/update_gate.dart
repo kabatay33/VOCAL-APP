@@ -37,8 +37,7 @@ class _UpdateGateState extends State<UpdateGate> {
 
   Future<void> _run() async {
     try {
-      // 1) Kayıtlı sunucu var mı? Yoksa update kontrolü atla (kullanıcı henüz
-      //    sunucu ayarlamamış, login ekranında ayarlayacak)
+      // 1) Kayıtlı sunucu var mı? Yoksa update kontrolü atla
       final host = await Storage.getServerHost();
       if (host == null || host.trim().isEmpty) {
         _setStatus('Sunucu ayarlı değil — atlanıyor');
@@ -47,17 +46,25 @@ class _UpdateGateState extends State<UpdateGate> {
         return;
       }
 
-      // 2) Manifest'i 500ms aralıkla retry'le çek — backend henüz açılıyor
-      //    olabilir (subprocess startup ~1-3 sn alabilir).
-      _setStatus('Sunucuya bağlanılıyor...');
-      _showCancelAfter(const Duration(seconds: 3));
-      final result = await _checkWithRetry(const Duration(seconds: 8));
-      if (result == null) {
-        _setStatus('Sunucuya ulaşılamadı — atlanıyor');
-        await Future.delayed(const Duration(milliseconds: 600));
+      // 1.5) Son güncelleme zamanını kontrol et — 1 saat içinde yapıldıysa atla
+      final lastUpdate = await Storage.getLastUpdateCheck();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (lastUpdate != null && (now - lastUpdate) < 3600000) {
+        _setStatus('Güncelleme yakın zamanda yapıldı — atlanıyor');
+        await Future.delayed(const Duration(milliseconds: 400));
         _proceedToApp();
         return;
       }
+
+      // 2) GitHub'dan güncelleme kontrolü
+      _setStatus('Güncelleme kontrolü...');
+      _showCancelAfter(const Duration(seconds: 5));
+      final result = await UpdaterService.instance
+          .checkForUpdate()
+          .timeout(const Duration(seconds: 10));
+
+      // Kontrol zamanını kaydet
+      await Storage.setLastUpdateCheck(now);
 
       if (!result.hasUpdate) {
         _setStatus('Güncel: ${result.currentVersion}');
@@ -66,7 +73,7 @@ class _UpdateGateState extends State<UpdateGate> {
         return;
       }
 
-      // 4) Yeni sürüm var → otomatik indir + uygula
+      // 3) Yeni sürüm var → otomatik indir + uygula
       _setStatus(
           'Yeni sürüm bulundu: ${result.latestVersion}\nİndiriliyor...');
       setState(() => _progress = 0);
@@ -92,23 +99,6 @@ class _UpdateGateState extends State<UpdateGate> {
     Timer(d, () {
       if (mounted) setState(() => _showCancel = true);
     });
-  }
-
-  /// 500ms aralıkla manifest çekmeyi dener. Backend startup'a kadar
-  /// connection refused alabiliriz; bunu sessizce ignore ederiz.
-  Future<UpdateCheckResult?> _checkWithRetry(Duration total) async {
-    final deadline = DateTime.now().add(total);
-    while (DateTime.now().isBefore(deadline)) {
-      try {
-        return await UpdaterService.instance
-            .checkForUpdate()
-            .timeout(const Duration(seconds: 3));
-      } catch (_) {
-        // backend henüz hazır değil, tekrar dene
-        await Future.delayed(const Duration(milliseconds: 500));
-      }
-    }
-    return null;
   }
 
   void _proceedToApp() {

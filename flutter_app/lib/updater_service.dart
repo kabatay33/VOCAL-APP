@@ -102,7 +102,6 @@ class UpdaterService {
   static final UpdaterService instance = UpdaterService._();
   UpdaterService._();
 
-  String? _cachedCurrentVersion;
   bool _downloading = false;
   double _progress = 0;
   String? _statusMessage;
@@ -150,35 +149,40 @@ class UpdaterService {
   }
 
   Future<String> _currentVersion() async {
-    if (_cachedCurrentVersion != null) return _cachedCurrentVersion!;
     final info = await PackageInfo.fromPlatform();
-    _cachedCurrentVersion = info.version;
     return info.version;
   }
 
   /// Semver karşılaştırma. Hatalı parse'ta false döner.
+  /// Build numarasını da dikkate alır (1.0.5+8 < 1.0.5+9).
   bool _isNewer(String latest, String current) {
     try {
       final l = _parse(latest);
       final c = _parse(current);
+      // Major.Minor.Patch karşılaştırması
       for (int i = 0; i < 3; i++) {
         if (l[i] > c[i]) return true;
         if (l[i] < c[i]) return false;
       }
-      return false;
+      // Aynı sürümse build numarasını kontrol et
+      return l[3] > c[3];
     } catch (e) {
       debugPrint('[UPDATER] version parse error: $e');
       return false;
     }
   }
 
+  /// [major, minor, patch, build] döner. Build yoksa 0.
   List<int> _parse(String version) {
-    final clean = version.split('+').first.split('-').first;
-    final parts = clean.split('.').map(int.parse).toList();
+    final buildSplit = version.split('+');
+    final buildNum = buildSplit.length > 1 ? int.tryParse(buildSplit[1]) ?? 0 : 0;
+    final clean = buildSplit.first.split('-').first;
+    final parts = clean.split('.').map((s) => int.tryParse(s) ?? 0).toList();
     while (parts.length < 3) {
       parts.add(0);
     }
-    return parts.sublist(0, 3);
+    parts.add(buildNum);
+    return parts;
   }
 
   /// Release zip'ini indirip PowerShell update script'i ile uygula.
@@ -279,6 +283,7 @@ class UpdaterService {
     required String exeName,
     required String logPath,
   }) {
+    final baseName = _processBaseName(exeName);
     return '''
 \$ErrorActionPreference = "Continue"
 \$logPath = "$logPath"
@@ -288,29 +293,43 @@ function Log(\$msg) {
 
 Log "Update başladı: $exeName"
 
-# 1) App'in kapanmasını bekle
+# 1) App'in kapanmasını bekle (max 30 sn)
 \$timeout = 30
 while (\$timeout -gt 0) {
-  \$proc = Get-Process -Name "${_processBaseName(exeName)}" -ErrorAction SilentlyContinue
+  \$proc = Get-Process -Name "$baseName" -ErrorAction SilentlyContinue
   if (-not \$proc) { break }
   Start-Sleep -Milliseconds 500
   \$timeout -= 1
 }
-Get-Process -Name "${_processBaseName(exeName)}" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
+Get-Process -Name "$baseName" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
 Log "App kapandı"
 
-# 2) Zip'i install dir'a extract
-Log "Extract: $zipPath -> $installDir"
+# 2) Geçici dizine extract et, sonra taşı (kilitli dosya sorununu önler)
+\$tempExtract = "$installDir\\_update_temp"
+if (Test-Path \$tempExtract) { Remove-Item \$tempExtract -Recurse -Force }
+Log "Extract: $zipPath -> \$tempExtract"
 try {
-  Expand-Archive -Path "$zipPath" -DestinationPath "$installDir" -Force
+  Expand-Archive -Path "$zipPath" -DestinationPath "\$tempExtract" -Force
   Log "Extract OK"
 } catch {
   Log "Extract HATA: \$_"
   exit 1
 }
 
-# 3) App'i yeniden başlat
+# 3) Eski dosyaları sil, yenisini taşı
+Log "Dosyalar taşınıyor..."
+Get-ChildItem "\$tempExtract" | ForEach-Object {
+  \$dest = Join-Path "$installDir" \$_.Name
+  if (Test-Path \$dest) {
+    Remove-Item \$dest -Force -ErrorAction SilentlyContinue
+  }
+  Move-Item \$_.FullName \$dest -Force -ErrorAction SilentlyContinue
+}
+Remove-Item \$tempExtract -Recurse -Force -ErrorAction SilentlyContinue
+Log "Taşıma tamamlandı"
+
+# 4) App'i yeniden başlat
 Start-Sleep -Milliseconds 500
 Log "App yeniden başlatılıyor"
 Start-Process -FilePath "$installDir\\$exeName"

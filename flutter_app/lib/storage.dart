@@ -40,8 +40,8 @@ class Storage {
   static const _kMembersPanelVisible = 'membersPanelVisible';
   static const _kRememberMe = 'remember_me';
   static const _kSavedServers = 'saved_servers_v1';
-  // Son giriş yapılan kullanıcı adı — login öncesi UI'da gösterilir.
   static const _kLastUsername = 'last_username';
+  static const _kLastUpdateCheck = 'last_update_check';
 
   static Future<String?> getServerHost() async {
     final p = await SharedPreferences.getInstance();
@@ -248,5 +248,16 @@ class Storage {
     final list = await getSavedServers();
     list.removeWhere((s) => s.host == host);
     await setSavedServers(list);
+  }
+
+  /// Son güncelleme kontrolü zaman damgası (millisecondsSinceEpoch).
+  static Future<int?> getLastUpdateCheck() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getInt(_kLastUpdateCheck);
+  }
+
+  static Future<void> setLastUpdateCheck(int timestamp) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setInt(_kLastUpdateCheck, timestamp);
   }
 }
