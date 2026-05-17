@@ -52,19 +52,22 @@ try {
 }
 
 # Updater build dosyalarini el ile kopyala (CMake install bazen basarisiz oluyor)
+# ONCE mevcut data/ klasoru temizlenir (ic ice kopyalama sorununu onlemek icin)
 $updaterAppSo = Join-Path $updaterDir 'build\windows\app.so'
 $updaterFlutterAssets = Join-Path $updaterDir 'build\flutter_assets'
 if (Test-Path $updaterBuildDir) {
   $destData = Join-Path $updaterBuildDir 'data'
+  # data/ klasoru varsa temizle (ic ice data/data/ sorununu onlemek icin)
+  if (Test-Path $destData) { Remove-Item $destData -Recurse -Force }
+  New-Item -ItemType Directory -Force -Path $destData | Out-Null
+
   if (Test-Path $updaterAppSo) {
-    if (-not (Test-Path $destData)) { New-Item -ItemType Directory -Force -Path $destData | Out-Null }
     Copy-Item -Path $updaterAppSo -Destination (Join-Path $destData 'app.so') -Force
   }
   if (Test-Path $updaterFlutterAssets) {
-    if (-not (Test-Path $destData)) { New-Item -ItemType Directory -Force -Path $destData | Out-Null }
     Copy-Item -Path $updaterFlutterAssets -Destination (Join-Path $destData 'flutter_assets') -Recurse -Force
   }
-  Write-Host "Updater build dosyalar� kopyaland�"
+  Write-Host "Updater build dosyalar� kopyaland� (temiz)"
 }
 
 # 2.5) Updater dosyalarini GECICI bir dizine yedekle
@@ -89,7 +92,9 @@ if (Test-Path $updaterBuildDir) {
   }
   $dataSrc = Join-Path $updaterBuildDir "data"
   if (Test-Path $dataSrc) {
-    Copy-Item -Path $dataSrc -Destination "$updaterTempDir\data" -Recurse -Force
+    $destDataStaging = Join-Path $updaterTempDir "data"
+    if (Test-Path $destDataStaging) { Remove-Item $destDataStaging -Recurse -Force }
+    Copy-Item -Path $dataSrc -Destination $destDataStaging -Recurse -Force
   }
   Write-Host "Updater dosyalar� gecici dizine yedeklendi"
 } else {
@@ -121,7 +126,9 @@ if (Test-Path $updaterTempDir) {
   }
   $dataStaging = Join-Path $updaterTempDir "data"
   if (Test-Path $dataStaging) {
-    Copy-Item -Path $dataStaging -Destination "$updaterReleaseDir\data" -Recurse -Force
+    $destDataRelease = Join-Path $updaterReleaseDir "data"
+    if (Test-Path $destDataRelease) { Remove-Item $destDataRelease -Recurse -Force }
+    Copy-Item -Path $dataStaging -Destination $destDataRelease -Recurse -Force
   }
   Write-Host "Updater dosyarlari gecici dizinden release'e kopyaland� (temiz)"
 } else {
