@@ -61,8 +61,8 @@ if (Test-Path $playitSrc) {
   Write-Warning "playit.exe bulunamadı: $playitSrc"
 }
 
-# 4) Updater'ı kopyala
-$updaterSrc = Join-Path $projectRoot "updater\updater.exe"
+# 4) Updater'ı kopyala (vocal_updater.exe → updater.exe olarak)
+$updaterSrc = Join-Path $projectRoot "updater\build\windows\x64\runner\Release\vocal_updater.exe"
 $updaterDst = Join-Path $releaseDir "updater.exe"
 if (Test-Path $updaterSrc) {
   Copy-Item -Path $updaterSrc -Destination $updaterDst -Force
