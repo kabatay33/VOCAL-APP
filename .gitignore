@@ -28,6 +28,14 @@ backend/.env
 
 # Test artifacts
 test_install_v100/
+test_full_run/
+test_updater_run/
+
+# Updater build artifacts
+updater/.dart_tool/
+updater/build/
+updater/.idea/
+updater/*.iml
 
 # Release zip'leri GitHub Releases'e yüklenir, repo'da tutmaya gerek yok
 dist/

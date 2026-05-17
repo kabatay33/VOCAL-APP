@@ -34,74 +34,22 @@ if ($pubspec -match 'version:\s+(\d+\.\d+\.\d+)\+(\d+)') {
   Write-Host "pubspec.yaml: version $Version+$newBuild olarak guncellendi"
 }
 
-# 2) Updater build
-Write-Host "`nUpdater build aliniyor..."
-$updaterBuildDir = Join-Path $updaterDir 'build\windows\x64\runner\Release'
-$updaterNativeAssets = Join-Path $updaterDir 'build\native_assets\windows'
-if (-not (Test-Path $updaterNativeAssets)) {
-  New-Item -ItemType Directory -Force -Path $updaterNativeAssets | Out-Null
-}
-Push-Location $updaterDir
-try {
-  & flutter build windows --release
-  if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Flutter updater build hatasi (devam ediliyor)"
-  }
-} finally {
-  Pop-Location
-}
+# 2) Updater - PowerShell/BAT (Flutter yerine native script)
+Write-Host "`nUpdater (PowerShell/BAT) hazirlaniyor..."
+$updaterBatSrc = Join-Path $updaterDir 'bin\vocal_updater.bat'
+$updaterPs1Src = Join-Path $updaterDir 'bin\vocal_updater.ps1'
 
-# Updater build dosyalarini el ile kopyala (CMake install bazen basarisiz oluyor)
-# ONCE mevcut data/ klasoru temizlenir (ic ice kopyalama sorununu onlemek icin)
-$updaterAppSo = Join-Path $updaterDir 'build\windows\app.so'
-$updaterFlutterAssets = Join-Path $updaterDir 'build\flutter_assets'
-if (Test-Path $updaterBuildDir) {
-  $destData = Join-Path $updaterBuildDir 'data'
-  # data/ klasoru varsa temizle (ic ice data/data/ sorununu onlemek icin)
-  if (Test-Path $destData) { Remove-Item $destData -Recurse -Force }
-  New-Item -ItemType Directory -Force -Path $destData | Out-Null
-
-  if (Test-Path $updaterAppSo) {
-    Copy-Item -Path $updaterAppSo -Destination (Join-Path $destData 'app.so') -Force
-  }
-  if (Test-Path $updaterFlutterAssets) {
-    Copy-Item -Path $updaterFlutterAssets -Destination (Join-Path $destData 'flutter_assets') -Recurse -Force
-  }
-  # icudtl.dat Flutter build'de updaterBuildDir'a kopyalanir
-  # (CMake install basarisiz olsa bile bu dosya oradadir)
-  Write-Host "Updater build dosyalar� kopyaland� (temiz)"
-}
+if (-not (Test-Path $updaterBatSrc)) { Write-Error "vocal_updater.bat bulunamadi!" }
+if (-not (Test-Path $updaterPs1Src)) { Write-Error "vocal_updater.ps1 bulunamadi!" }
 
 # 2.5) Updater dosyalarini GECICI bir dizine yedekle
-# NOT: Ana app build edildikten sonra updater build klasoru kirletilebilir!
-# Bu yuzden updater dosyalarini once gecici bir dizine yedekliyoruz.
 $updaterTempDir = Join-Path $projectRoot "dist\_updater_staging"
 if (Test-Path $updaterTempDir) { Remove-Item $updaterTempDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $updaterTempDir | Out-Null
 
-if (Test-Path $updaterBuildDir) {
-  $exeSrc = Join-Path $updaterBuildDir "vocal_updater.exe"
-  if (Test-Path $exeSrc) {
-    Copy-Item -Path $exeSrc -Destination (Join-Path $updaterTempDir "updater.exe") -Force
-  }
-  $dllSrc = Join-Path $updaterBuildDir "flutter_windows.dll"
-  if (Test-Path $dllSrc) {
-    Copy-Item -Path $dllSrc -Destination (Join-Path $updaterTempDir "flutter_windows.dll") -Force
-  }
-  $icuSrc = Join-Path $updaterBuildDir "icudtl.dat"
-  if (Test-Path $icuSrc) {
-    Copy-Item -Path $icuSrc -Destination (Join-Path $updaterTempDir "icudtl.dat") -Force
-  }
-  $dataSrc = Join-Path $updaterBuildDir "data"
-  if (Test-Path $dataSrc) {
-    $destDataStaging = Join-Path $updaterTempDir "data"
-    if (Test-Path $destDataStaging) { Remove-Item $destDataStaging -Recurse -Force }
-    Copy-Item -Path $dataSrc -Destination $destDataStaging -Recurse -Force
-  }
-  Write-Host "Updater dosyalar� gecici dizine yedeklendi"
-} else {
-  Write-Warning "updater build bulunamad�: $updaterBuildDir"
-}
+Copy-Item -Path $updaterBatSrc -Destination (Join-Path $updaterTempDir "updater.bat") -Force
+Copy-Item -Path $updaterPs1Src -Destination (Join-Path $updaterTempDir "updater.ps1") -Force
+Write-Host "Updater dosyalar� gecici dizine yedeklendi"
 
 # 3) Ana Flutter release build
 Write-Host "`nFlutter Windows release build aliniyor..."

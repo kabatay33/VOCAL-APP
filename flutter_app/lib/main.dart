@@ -15,6 +15,22 @@ import 'update_gate.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // İlk açılışta updater'ı spawn et + kendini kapat.
+  // Endless-loop önleme: ENV var VOCAL_NO_UPDATER=1 — updater discord_clone'u
+  // bu env ile başlatır; biz görünce updater'ı bir daha tetiklemeyiz.
+  // (Flutter Windows runner main() argümanlarını engine'e pass etmiyor,
+  // bu yüzden command-line arg yerine env var kullanıyoruz.)
+  if (!kIsWeb &&
+      Platform.isWindows &&
+      Platform.environment['VOCAL_NO_UPDATER'] != '1') {
+    if (await _trySpawnUpdater()) {
+      // Updater başlatıldı, biz çıkıyoruz. Updater check yapacak ve
+      // gerekirse güncelleyip discord_clone'u VOCAL_NO_UPDATER=1 ile relaunch.
+      exit(0);
+    }
+    // Updater bulunamadı veya başlatılamadı — normal akışla devam et
+  }
+
   if (!kIsWeb &&
       (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
     await windowManager.ensureInitialized();
@@ -45,6 +61,36 @@ Future<void> main() async {
   await InputManager.init();
 
   runApp(const App());
+}
+
+/// `updater\updater.exe` dosyası bizim yanımızda varsa onu spawn eder.
+/// Updater check + (gerekirse) update + discord_clone --no-updater ile relaunch
+/// yapar.
+///
+/// Dönüş: true = updater başlatıldı (biz exit'lemeliyiz), false = updater yok
+/// (normal akışla devam edilecek).
+Future<bool> _trySpawnUpdater() async {
+  try {
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final updaterPath =
+        '$exeDir${Platform.pathSeparator}updater${Platform.pathSeparator}updater.exe';
+    if (!File(updaterPath).existsSync()) {
+      debugPrint('[MAIN] updater.exe bulunamadi: $updaterPath');
+      return false;
+    }
+    debugPrint('[MAIN] Updater spawn ediliyor: $updaterPath');
+    // cmd /c start ile detached — discord_clone exit edince de updater yaşar
+    await Process.start(
+      'cmd',
+      ['/c', 'start', '""', '/D', File(updaterPath).parent.path, updaterPath],
+      mode: ProcessStartMode.detached,
+      runInShell: false,
+    );
+    return true;
+  } catch (e) {
+    debugPrint('[MAIN] updater spawn hatasi: $e');
+    return false;
+  }
 }
 
 class App extends StatelessWidget {
