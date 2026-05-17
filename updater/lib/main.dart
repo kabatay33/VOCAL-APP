@@ -7,9 +7,6 @@ import 'package:flutter/services.dart';
 const String githubOwner = 'kabatay33';
 const String githubRepo = 'VOCAL-APP';
 
-// Radmin VPN yolu
-const String radminVpnPath = r'C:\Program Files (x86)\Radmin VPN\RvRvpnGui.exe';
-
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const UpdaterApp());
@@ -32,17 +29,8 @@ class UpdaterApp extends StatelessWidget {
 
 class _Release {
   final String tagName;
-  final String name;
-  final bool draft;
-  final bool prerelease;
   final List<_Asset> assets;
-  _Release({
-    required this.tagName,
-    required this.name,
-    required this.draft,
-    required this.prerelease,
-    required this.assets,
-  });
+  _Release({required this.tagName, required this.assets});
   String get cleanVersion {
     final t = tagName.trim();
     if (t.toLowerCase().startsWith('v')) return t.substring(1);
@@ -79,6 +67,7 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
   String? _currentVersion;
   String? _latestVersion;
   double _progress = 0;
+  String? _errorDetail;
 
   @override
   void initState() {
@@ -86,74 +75,108 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _run());
   }
 
-  /// Install directory: updater/ alt klasöründeyse üst klasöre, değilsek olduğumuz yere
-  String get _installDir {
-    final exeDir = File(Platform.resolvedExecutable).parent.path;
-    // updater/ alt klasöründeysek üst klasöre git
+  /// Install directory'yi bul: discord_clone.exe'nin olduğu yer
+  String _findInstallDir() {
+    final exePath = Platform.resolvedExecutable;
+    final exeDir = File(exePath).parent.path;
+
+    // 1) updater/ alt klasöründeysek üst klasöre bak
     if (exeDir.endsWith('\\updater') || exeDir.endsWith('/updater')) {
-      final parentDir = Directory(exeDir).parent?.path;
-      if (parentDir != null) return parentDir;
+      final parent = Directory(exeDir).parent?.path;
+      if (parent != null) {
+        final candidate = '$parent\\discord_clone.exe';
+        if (File(candidate).existsSync()) {
+          debugPrint('[UPDATER] installDir (parent): $parent');
+          return parent;
+        }
+      }
     }
-    // Ana dizindeyse ve updater/ varsa onu kullan
-    final updaterSubDir = '$exeDir\\updater';
-    if (Directory(updaterSubDir).existsSync()) {
-      return exeDir; // Ana dizin, discord_clone.exe burada
+
+    // 2) Aynı dizinde discord_clone.exe var mı?
+    final sameDir = '$exeDir\\discord_clone.exe';
+    if (File(sameDir).existsSync()) {
+      debugPrint('[UPDATER] installDir (same): $exeDir');
+      return exeDir;
     }
+
+    // 3) Üst klasöre bak
+    final parentDir = Directory(exeDir).parent?.path;
+    if (parentDir != null) {
+      final parentCandidate = '$parentDir\\discord_clone.exe';
+      if (File(parentCandidate).existsSync()) {
+        debugPrint('[UPDATER] installDir (grandparent): $parentDir');
+        return parentDir;
+      }
+    }
+
+    // 4) Bulamadık, olduğumuz yeri döndür
+    debugPrint('[UPDATER] discord_clone.exe bulunamadı, exeDir kullanılıyor: $exeDir');
     return exeDir;
   }
 
   Future<void> _run() async {
     try {
-      // 1. Radmin VPN kontrolü ve başlatma
+      // 1. Radmin VPN kontrol
       await _ensureRadminVpn();
 
-      // 2. Versiyon kontrolü
-      _currentVersion = _readVersion();
+      // 2. Mevcut versiyonu oku
+      final installDir = _findInstallDir();
+      _currentVersion = _readVersion(installDir);
+      debugPrint('[UPDATER] Mevcut sürüm: $_currentVersion');
+      debugPrint('[UPDATER] Install dir: $installDir');
+
       setState(() {
         _status = 'Mevcut sürüm: ${_currentVersion ?? "bilinmiyor"}\nGitHub kontrol ediliyor...';
       });
 
       await Future.delayed(const Duration(milliseconds: 500));
 
+      // 3. GitHub'dan son sürümü al
       final release = await _fetchRelease();
       if (release == null) {
+        // GitHub'a bağlanılamadı — mevcut sürümle devam
         setState(() {
           _state = _State.error;
-          _status = 'GitHub\'a bağlanılamadı\nMevcut sürümle devam ediliyor';
+          _status = 'GitHub\'a bağlanılamadı';
+          _errorDetail = 'Mevcut sürümle devam ediliyor';
         });
         await Future.delayed(const Duration(seconds: 2));
-        _launchAndExit();
+        _launchAndExit(installDir);
         return;
       }
 
       _latestVersion = release.cleanVersion;
+      debugPrint('[UPDATER] Son sürüm: $_latestVersion');
 
+      // 4. Versiyon karşılaştırması
       if (_currentVersion != null && !_isNewer(_latestVersion!, _currentVersion!)) {
         setState(() {
           _state = _State.upToDate;
-          _status = 'Uygulama güncel!\nSürüm: $_currentVersion';
+          _status = 'Uygulama güncel!';
+          _errorDetail = 'Sürüm: $_currentVersion';
         });
         await Future.delayed(const Duration(seconds: 1));
-        _launchAndExit();
+        _launchAndExit(installDir);
         return;
       }
 
-      // Yeni sürüm var
+      // 5. Yeni sürüm var — indir
       final zipAsset = release.zipAsset;
       if (zipAsset == null) {
         setState(() {
           _state = _State.error;
-          _status = 'Release\'de .zip dosyası yok\nMevcut sürümle devam';
+          _status = 'Release\'de .zip dosyası yok';
+          _errorDetail = 'Mevcut sürümle devam';
         });
         await Future.delayed(const Duration(seconds: 2));
-        _launchAndExit();
+        _launchAndExit(installDir);
         return;
       }
 
-      // İndir
       setState(() {
         _state = _State.downloading;
-        _status = 'Güncelleme indiriliyor...\n$_latestVersion';
+        _status = 'Güncelleme indiriliyor...';
+        _errorDetail = 'Sürüm $_latestVersion';
         _progress = 0;
       });
 
@@ -167,72 +190,84 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
         if (mounted) setState(() => _progress = p);
       });
 
-      // Extract
+      // 6. Çıkar
       setState(() {
         _state = _State.applying;
         _status = 'Güncelleme uygulanıyor...';
+        _errorDetail = null;
       });
 
       final extractDir = Directory('${staging.path}${Platform.pathSeparator}extracted');
       extractDir.createSync(recursive: true);
       await _extractZip(zipPath, extractDir.path);
 
-      // Uygula
+      // 7. Uygula
       await _waitForAppExit();
-      _copyRecursive(extractDir, _installDir);
-      _writeVersion(_latestVersion!);
-
+      _copyRecursive(extractDir, installDir);
+      _writeVersion(installDir, _latestVersion!);
       try { staging.deleteSync(recursive: true); } catch (_) {}
 
       setState(() {
         _state = _State.done;
-        _status = 'Güncelleme tamamlandı!\nYeni sürüm: $_latestVersion';
+        _status = 'Güncelleme tamamlandı!';
+        _errorDetail = 'Yeni sürüm: $_latestVersion';
       });
 
       await Future.delayed(const Duration(seconds: 1));
-      _launchAndExit();
+      _launchAndExit(installDir);
     } catch (e) {
+      debugPrint('[UPDATER] HATA: $e');
       setState(() {
         _state = _State.error;
-        _status = 'Hata: $e\nMevcut sürümle devam ediliyor...';
+        _status = 'Hata oluştu';
+        _errorDetail = '$e\nMevcut sürümle devam ediliyor...';
       });
-      await Future.delayed(const Duration(seconds: 2));
-      _launchAndExit();
+      await Future.delayed(const Duration(seconds: 3));
+      _launchAndExit(_findInstallDir());
     }
   }
 
-  /// Radmin VPN'ın çalıştığını kontrol et, çalışmıyorsa başlat
   Future<void> _ensureRadminVpn() async {
     try {
-      // Radmin VPN çalışıyor mu?
       if (_isRunning('RvRvpnGui.exe')) {
         debugPrint('[UPDATER] Radmin VPN zaten çalışıyor');
         return;
       }
-      // Radmin VPN başlat
-      final radminExe = File(radminVpnPath);
+      const radminPath = r'C:\Program Files (x86)\Radmin VPN\RvRvpnGui.exe';
+      final radminExe = File(radminPath);
       if (await radminExe.exists()) {
         debugPrint('[UPDATER] Radmin VPN başlatılıyor...');
-        Process.start(radminVpnPath, [], mode: ProcessStartMode.detached, runInShell: false);
-        // Başlaması için biraz bekle
+        Process.start(radminPath, [], mode: ProcessStartMode.detached, runInShell: false);
         await Future.delayed(const Duration(seconds: 3));
       } else {
-        debugPrint('[UPDATER] Radmin VPN bulunamadı: $radminVpnPath');
+        debugPrint('[UPDATER] Radmin VPN bulunamadı');
       }
     } catch (e) {
-      debugPrint('[UPDATER] Radmin VPN başlatma hatası: $e');
+      debugPrint('[UPDATER] Radmin VPN hatası: $e');
     }
   }
 
-  void _launchAndExit() {
-    final exePath = '$_installDir${Platform.pathSeparator}discord_clone.exe';
+  void _launchAndExit(String installDir) {
+    final exePath = '$installDir\\discord_clone.exe';
+    debugPrint('[UPDATER] Başlatılıyor: $exePath');
+
     if (File(exePath).existsSync()) {
-      Process.start(exePath, [], mode: ProcessStartMode.detached, runInShell: false);
+      try {
+        Process.start(exePath, [], mode: ProcessStartMode.detached, runInShell: false);
+        debugPrint('[UPDATER] discord_clone.exe başlatıldı');
+      } catch (e) {
+        debugPrint('[UPDATER] Başlatma hatası: $e');
+      }
+    } else {
+      debugPrint('[UPDATER] discord_clone.exe BULUNAMADI: $exePath');
     }
-    // Önce Flutter penceresini kapat, sonra exit
-    SystemNavigator.pop();
-    // 1 saniye sonra zorla çık (SystemNavigator.pop yeterli olmazsa)
-    Future.delayed(const Duration(seconds: 1), () => exit(0));
+
+    // Pencereyi kapat ve çık
+    try {
+      SystemNavigator.pop();
+    } catch (_) {}
+    // 500ms sonra zorla çık
+    Future.delayed(const Duration(milliseconds: 500), () => exit(0));
   }
 
   @override
@@ -320,6 +355,14 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
                         fontSize: 13,
                       ),
                     ),
+                    if (_errorDetail != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _errorDetail!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.white38, fontSize: 11),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -341,20 +384,16 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
     }
   }
 
-  // ==================== Version ====================
-
-  String? _readVersion() {
-    final f = File('$_installDir${Platform.pathSeparator}version.txt');
+  String? _readVersion(String dir) {
+    final f = File('$dir\\version.txt');
     if (!f.existsSync()) return null;
     return f.readAsStringSync().trim();
   }
 
-  void _writeVersion(String version) {
-    final f = File('$_installDir${Platform.pathSeparator}version.txt');
+  void _writeVersion(String dir, String version) {
+    final f = File('$dir\\version.txt');
     f.writeAsStringSync(version);
   }
-
-  // ==================== GitHub ====================
 
   Future<_Release?> _fetchRelease() async {
     final client = HttpClient();
@@ -368,9 +407,6 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
           as Map<String, dynamic>;
       return _Release(
         tagName: (data['tag_name'] ?? '') as String,
-        name: (data['name'] ?? '') as String,
-        draft: (data['draft'] as bool?) ?? false,
-        prerelease: (data['prerelease'] as bool?) ?? false,
         assets: ((data['assets'] as List?) ?? const []).map((a) => _Asset(
           name: (a['name'] ?? '') as String,
           downloadUrl: (a['browser_download_url'] ?? '') as String,
@@ -381,8 +417,6 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
       client.close();
     }
   }
-
-  // ==================== Download ====================
 
   Future<void> _download(
       String url, String dest, int total, void Function(double) onProgress) async {
@@ -403,8 +437,6 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
       client.close();
     }
   }
-
-  // ==================== Extract & Apply ====================
 
   Future<void> _extractZip(String zipPath, String destPath) async {
     final result = await Process.run('powershell', [
@@ -437,7 +469,7 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
   void _copyRecursive(Directory src, String dest) {
     for (final e in src.listSync(recursive: false)) {
       final name = e.uri.pathSegments.last;
-      final dp = '$dest${Platform.pathSeparator}$name';
+      final dp = '$dest\\$name';
       if (e is Directory) {
         Directory(dp).createSync(recursive: true);
         _copyRecursive(e, dp);
@@ -446,8 +478,6 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
       }
     }
   }
-
-  // ==================== Version Compare ====================
 
   bool _isNewer(String latest, String current) {
     try {
