@@ -67,28 +67,31 @@ if (Test-Path $updaterBuildDir) {
   Write-Host "Updater build dosyalar� kopyaland�"
 }
 
-# 2.5) Updater dosyalarini release'e kopyala (ONCE, before main app build)
-$updaterReleaseDir = Join-Path $releaseDir "updater"
-New-Item -ItemType Directory -Force -Path $updaterReleaseDir | Out-Null
+# 2.5) Updater dosyalarini GECICI bir dizine yedekle
+# NOT: Ana app build edildikten sonra updater build klasoru kirletilebilir!
+# Bu yuzden updater dosyalarini once gecici bir dizine yedekliyoruz.
+$updaterTempDir = Join-Path $projectRoot "dist\_updater_staging"
+if (Test-Path $updaterTempDir) { Remove-Item $updaterTempDir -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $updaterTempDir | Out-Null
 
 if (Test-Path $updaterBuildDir) {
-  $updaterExeSrc = Join-Path $updaterBuildDir "vocal_updater.exe"
-  if (Test-Path $updaterExeSrc) {
-    Copy-Item -Path $updaterExeSrc -Destination (Join-Path $updaterReleaseDir "updater.exe") -Force
+  $exeSrc = Join-Path $updaterBuildDir "vocal_updater.exe"
+  if (Test-Path $exeSrc) {
+    Copy-Item -Path $exeSrc -Destination (Join-Path $updaterTempDir "updater.exe") -Force
   }
   $dllSrc = Join-Path $updaterBuildDir "flutter_windows.dll"
   if (Test-Path $dllSrc) {
-    Copy-Item -Path $dllSrc -Destination (Join-Path $updaterReleaseDir "flutter_windows.dll") -Force
+    Copy-Item -Path $dllSrc -Destination (Join-Path $updaterTempDir "flutter_windows.dll") -Force
   }
   $icuSrc = Join-Path $updaterBuildDir "icudtl.dat"
   if (Test-Path $icuSrc) {
-    Copy-Item -Path $icuSrc -Destination (Join-Path $updaterReleaseDir "icudtl.dat") -Force
+    Copy-Item -Path $icuSrc -Destination (Join-Path $updaterTempDir "icudtl.dat") -Force
   }
   $dataSrc = Join-Path $updaterBuildDir "data"
   if (Test-Path $dataSrc) {
-    Copy-Item -Path $dataSrc -Destination "$updaterReleaseDir\data" -Recurse -Force
+    Copy-Item -Path $dataSrc -Destination "$updaterTempDir\data" -Recurse -Force
   }
-  Write-Host "updater/ klasoru release'e kopyaland�"
+  Write-Host "Updater dosyalar� gecici dizine yedeklendi"
 } else {
   Write-Warning "updater build bulunamad�: $updaterBuildDir"
 }
@@ -106,6 +109,28 @@ try {
   Pop-Location
 }
 
+# 3.5) Updater dosyalarini gecici dizinden release'e kopyala
+# Ana app build edildikten sonra updater build klasoru kirletilmis olabilir.
+# Gecici yedekten kopyalayarak temiz updater dosyalarini elde ediyoruz.
+$updaterReleaseDir = Join-Path $releaseDir "updater"
+New-Item -ItemType Directory -Force -Path $updaterReleaseDir | Out-Null
+
+if (Test-Path $updaterTempDir) {
+  Get-ChildItem $updaterTempDir -File | ForEach-Object {
+    Copy-Item -Path $_.FullName -Destination (Join-Path $updaterReleaseDir $_.Name) -Force
+  }
+  $dataStaging = Join-Path $updaterTempDir "data"
+  if (Test-Path $dataStaging) {
+    Copy-Item -Path $dataStaging -Destination "$updaterReleaseDir\data" -Recurse -Force
+  }
+  Write-Host "Updater dosyarlari gecici dizinden release'e kopyaland� (temiz)"
+} else {
+  Write-Warning "Gecici updater dizini bulunamadi!"
+}
+
+# Temizlik
+if (Test-Path $updaterTempDir) { Remove-Item $updaterTempDir -Recurse -Force }
+
 if (-not (Test-Path $releaseDir)) {
   Write-Error "Release klasoru bulunamadi: $releaseDir"
   exit 1
@@ -114,6 +139,13 @@ if (-not (Test-Path $releaseDir)) {
 # 4) version.txt yaz
 Set-Content -Path "$releaseDir\version.txt" -Value "$Version" -NoNewline
 Write-Host "version.txt: $Version"
+
+# 4.5) Ana dizindeki updater.exe'yi kaldir (eski sürümden kalmis olabilir)
+$rootUpdater = Join-Path $releaseDir "updater.exe"
+if (Test-Path $rootUpdater) {
+  Remove-Item $rootUpdater -Force
+  Write-Host "Ana dizindeki updater.exe kaldirildi"
+}
 
 # 5) Zip olustur
 Write-Host "`nZip olusturuluyor: $zipOut"
