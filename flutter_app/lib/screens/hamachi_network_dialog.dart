@@ -4,15 +4,13 @@ import '../api.dart';
 import '../storage.dart';
 import '../tunnel_service.dart';
 
-/// Sunucu yönetim paneli — kayıtlı sunucu listesi + Tunnel kontrolü.
+/// Sunucu yonetim paneli — Radmin VPN IP bazli sunucu listesi.
 ///
-/// - Sol-üst: Public Tunnel paneli (playit.gg)
-/// - Alt: kayıtlı sunucu listesi (ekle/test et/bağlan/sil)
-/// - Tunnel açıldıysa public URL otomatik olarak listeye eklenir
+/// - Host sunucu: Radmin VPN IP adresi + nickname kaydi
+/// - Istemci: Kayitli sunuculara baglan
+/// - Radmin VPN kontrolu ve otomatik baslatma
 class HamachiNetworkDialog extends StatefulWidget {
-  /// Şu an bağlı olan backend host'u (UI'da "aktif" işaretlemek için).
   final String currentHost;
-  /// Login yapmışsak kullanıcı adı (UI başlığında gösterilir).
   final String? currentUsername;
   const HamachiNetworkDialog({
     super.key,
@@ -26,28 +24,39 @@ class HamachiNetworkDialog extends StatefulWidget {
 
 class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
   List<SavedServer> _servers = [];
-  // host -> ping sonucu
   final Map<String, PingResult> _pingResults = {};
   final Set<String> _pinging = {};
   bool _loading = true;
-
-  TunnelService get _tunnel => TunnelService.instance;
+  bool _radminRunning = false;
 
   @override
   void initState() {
     super.initState();
+    _checkRadmin();
     _load();
-    _tunnel.addListener(_onTunnelChanged);
   }
 
-  @override
-  void dispose() {
-    _tunnel.removeListener(_onTunnelChanged);
-    super.dispose();
+  void _checkRadmin() {
+    setState(() {
+      _radminRunning = TunnelService.isRadminVpnRunning();
+    });
   }
 
-  void _onTunnelChanged() {
-    if (mounted) setState(() {});
+  Future<void> _startRadmin() async {
+    final ok = await TunnelService.startRadminVpn();
+    if (mounted) {
+      setState(() {
+        _radminRunning = ok;
+      });
+      if (ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Radmin VPN baslatildi'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _load() async {
@@ -87,7 +96,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('İptal',
+            child: const Text('Iptal',
                 style: TextStyle(color: Colors.white70)),
           ),
           FilledButton(
@@ -130,90 +139,6 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
     Navigator.of(context).pop(s.host);
   }
 
-  Future<void> _toggleTunnel() async {
-    try {
-      if (_tunnel.running) {
-        await _tunnel.stop();
-        return;
-      }
-
-      // Secret key kontrolü
-      final key = await Storage.getPlayitSecretKey();
-      if (key == null || key.isEmpty) {
-        final newKey = await _showSecretKeyDialog();
-        if (newKey == null || newKey.isEmpty) return;
-        await Storage.setPlayitSecretKey(newKey);
-        _tunnel.setSecretKey(newKey);
-      } else {
-        _tunnel.setSecretKey(key);
-      }
-
-      final url = await _tunnel.start();
-      if (mounted) {
-        await Storage.upsertServer(SavedServer(
-          nickname: 'Public Tunnel (bu cihaz)',
-          host: url,
-          lastUsedAt: DateTime.now().millisecondsSinceEpoch,
-        ));
-        await _load();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Tunnel hatası: $e'),
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
-    }
-  }
-
-  Future<String?> _showSecretKeyDialog() async {
-    final ctrl = TextEditingController();
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF36393F),
-        title: const Text('playit.gg Secret Key',
-            style: TextStyle(color: Colors.white)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'https://playit.gg/account adresinden "Create Secret Key" ile key oluşturun.',
-              style: TextStyle(color: Colors.white70, fontSize: 12),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctrl,
-              style: const TextStyle(color: Colors.white),
-              decoration: const InputDecoration(
-                hintText: 'key-xxxxxxxxxxxxxxxx',
-                hintStyle: TextStyle(color: Colors.white38),
-                isDense: true,
-                filled: true,
-                fillColor: Color(0xFF202225),
-                border: OutlineInputBorder(borderSide: BorderSide.none),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('İptal', style: TextStyle(color: Colors.white70)),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF5865F2)),
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: const Text('Bağlan'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Dialog(
@@ -225,7 +150,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
           mainAxisSize: MainAxisSize.min,
           children: [
             _header(),
-            _tunnelPanel(),
+            _radminPanel(),
             const Divider(color: Colors.white12, height: 1),
             Expanded(child: _networksList()),
             const Divider(color: Colors.white12, height: 1),
@@ -255,7 +180,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
                       fontWeight: FontWeight.bold,
                     )),
                 if (widget.currentUsername != null)
-                  Text('Kullanıcı: ${widget.currentUsername}',
+                  Text('Kullanici: ${widget.currentUsername}',
                       style: const TextStyle(
                           color: Colors.white54, fontSize: 12)),
               ],
@@ -275,15 +200,8 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
     );
   }
 
-  /// Public Tunnel paneli — host PC backend'ini public URL'e açar.
-  /// playit.gg: Ücretsiz, WebSocket destekli.
-  Widget _tunnelPanel() {
-    final running = _tunnel.running;
-    final starting = _tunnel.starting;
-    final url = _tunnel.publicUrl;
-    final statusMsg = _tunnel.statusMessage;
-    const accentColor = Color(0xFF00D4AA);
-
+  /// Radmin VPN durum paneli
+  Widget _radminPanel() {
     return Container(
       color: const Color(0xFF1F2126),
       padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
@@ -293,8 +211,8 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
           Row(
             children: [
               Icon(
-                running ? Icons.cloud_done : Icons.cloud_outlined,
-                color: running ? accentColor : Colors.white54,
+                _radminRunning ? Icons.vpn_lock : Icons.vpn_lock_outlined,
+                color: _radminRunning ? Colors.greenAccent : Colors.white54,
                 size: 22,
               ),
               const SizedBox(width: 10),
@@ -303,136 +221,41 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
-                        Text(
-                          running
-                              ? 'Public Tunnel AÇIK'
-                              : starting
-                                  ? 'Tunnel başlatılıyor...'
-                                  : 'Public Tunnel Kapalı',
-                          style: TextStyle(
-                            color: running ? accentColor : Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: accentColor.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                          child: const Text(
-                            'playit.gg',
-                            style: TextStyle(
-                              color: accentColor,
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                        ),
-                      ],
+                    Text(
+                      _radminRunning
+                          ? 'Radmin VPN ACIK'
+                          : 'Radmin VPN Kapali',
+                      style: TextStyle(
+                        color: _radminRunning ? Colors.greenAccent : Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      running
-                          ? 'playit.gg üzerinden — arkadaşların bu URL ile bağlanır'
-                          : 'Bu cihaz host ise tıkla, arkadaşlarına paylaşacağın public URL alırsın',
+                      _radminRunning
+                          ? 'VPN agi aktif — sunucu ekleyebilir veya baglanabilirsin'
+                          : 'Sunucu eklemek veya baglanmak icin Radmin VPN gerekli',
                       style: const TextStyle(
                           color: Colors.white60, fontSize: 11),
                     ),
-                    if (statusMsg != null && !running && !starting) ...[
-                      const SizedBox(height: 2),
-                      Text(statusMsg,
-                          style: const TextStyle(
-                              color: Colors.redAccent, fontSize: 11)),
-                    ],
                   ],
                 ),
               ),
               const SizedBox(width: 8),
-              FilledButton.icon(
-                icon: starting
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : Icon(
-                        running
-                            ? Icons.stop_circle
-                            : Icons.cloud_upload,
-                        size: 16),
-                label: Text(running
-                    ? 'Kapat'
-                    : starting
-                        ? 'Bekle...'
-                        : 'İnternete Aç'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: running
-                      ? const Color(0xFF4F545C)
-                      : accentColor,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 8),
+              if (!_radminRunning)
+                FilledButton.icon(
+                  icon: const Icon(Icons.play_arrow, size: 16),
+                  label: const Text('Baslat'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF5865F2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                  ),
+                  onPressed: _startRadmin,
                 ),
-                onPressed: starting ? null : _toggleTunnel,
-              ),
             ],
           ),
-          if (url != null) ...[
-            const SizedBox(height: 8),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF202225),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                    color: accentColor.withValues(alpha: 0.5)),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.link,
-                      size: 14, color: accentColor),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: SelectableText(
-                      url,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.content_copy,
-                        size: 14, color: Colors.white70),
-                    tooltip: 'URL\'i kopyala',
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: url));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                              'Public URL kopyalandı — arkadaşlarına gönder'),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Bu URL\'i arkadaşına gönder. Onlar "Yeni Sunucu Ekle" → URL alanına yapıştırsın.',
-              style: TextStyle(color: Colors.white38, fontSize: 11),
-            ),
-          ],
         ],
       ),
     );
@@ -450,10 +273,10 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
             Icon(Icons.dns_outlined,
                 color: Colors.white.withValues(alpha: 0.2), size: 60),
             const SizedBox(height: 12),
-            const Text('Henüz kayıtlı sunucu yok',
+            const Text('Henuz kayitli sunucu yok',
                 style: TextStyle(color: Colors.white54)),
             const SizedBox(height: 4),
-            const Text('Aşağıdan yeni bir sunucu ekleyebilirsin.',
+            const Text('Asagidan yeni bir sunucu ekleyebilirsin.',
                 style: TextStyle(color: Colors.white38, fontSize: 12)),
           ],
         ),
@@ -508,7 +331,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
                           color: const Color(0xFF5865F2),
                           borderRadius: BorderRadius.circular(3),
                         ),
-                        child: const Text('AKTİF',
+                        child: const Text('AKTIF',
                             style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 9,
@@ -540,7 +363,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
                           child: Text(
                             ping.ok
                                 ? '${ping.rttMs} ms${ping.serverName != null ? " — ${ping.serverName}" : ""}'
-                                : (ping.error ?? 'Bağlanılamadı'),
+                                : (ping.error ?? 'Baglanilamadi'),
                             style: TextStyle(
                               color: ping.ok
                                   ? Colors.greenAccent
@@ -571,7 +394,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
                 ),
           IconButton(
             icon: const Icon(Icons.edit, size: 18, color: Colors.white60),
-            tooltip: 'Düzenle',
+            tooltip: 'Duzenle',
             onPressed: () => _addOrEdit(existing: s),
           ),
           IconButton(
@@ -591,7 +414,7 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
               minimumSize: const Size(0, 32),
             ),
             onPressed: isActive ? null : () => _select(s),
-            child: Text(isActive ? 'Seçili' : 'Bağlan'),
+            child: Text(isActive ? 'Secili' : 'Baglan'),
           ),
         ],
       ),
@@ -653,7 +476,7 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
   Future<void> _test() async {
     final host = _hostCtrl.text.trim();
     if (host.isEmpty) {
-      setState(() => _error = 'IP/URL boş olamaz');
+      setState(() => _error = 'IP adresi bos olamaz');
       return;
     }
     setState(() {
@@ -672,7 +495,7 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
     final nick = _nickCtrl.text.trim();
     final host = _hostCtrl.text.trim();
     if (host.isEmpty) {
-      setState(() => _error = 'IP/URL boş olamaz');
+      setState(() => _error = 'IP adresi bos olamaz');
       return;
     }
     Navigator.pop(
@@ -700,14 +523,14 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                isEdit ? 'Sunucuyu Düzenle' : 'Yeni Sunucu',
+                isEdit ? 'Sunucuyu Duzenle' : 'Yeni Sunucu Ekle',
                 style: const TextStyle(
                     color: Colors.white,
                     fontSize: 17,
                     fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 14),
-              const Text('TAKMA AD (NICKNAME)',
+              const Text('SUNCU ADI (NICKNAME)',
                   style: TextStyle(
                       color: Colors.white54,
                       fontSize: 11,
@@ -718,10 +541,10 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
                 controller: _nickCtrl,
                 style: const TextStyle(color: Colors.white),
                 decoration: _input(
-                    hint: 'örn: Ali\'nin Sunucusu, Ev Sunucusu...'),
+                    hint: 'orn: Ali\'nin Sunucusu, Ev Sunucusu...'),
               ),
               const SizedBox(height: 12),
-              const Text('SUNUCU URL\'İ',
+              const Text('RADMIN VPN IP ADRESI',
                   style: TextStyle(
                       color: Colors.white54,
                       fontSize: 11,
@@ -733,11 +556,11 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
                 style: const TextStyle(color: Colors.white),
                 keyboardType: TextInputType.url,
                 decoration: _input(
-                    hint: 'https://xxx.playit.gg'),
+                    hint: 'orn: 26.xxx.xxx.xxx:3000'),
               ),
               const SizedBox(height: 4),
               const Text(
-                'Arkadaşının paylaştığı Tunnel URL\'ini yapıştır (playit.gg).',
+                'Radmin VPN\'den aldigin IP adresini gir. Format: IP:PORT (orn: 26.123.45.67:3000)',
                 style: TextStyle(color: Colors.white38, fontSize: 11),
               ),
               const SizedBox(height: 14),
@@ -778,8 +601,8 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
                       Expanded(
                         child: Text(
                           _testResult!.ok
-                              ? 'Bağlanıldı (${_testResult!.rttMs} ms)${_testResult!.serverName != null ? " — ${_testResult!.serverName}" : ""}'
-                              : _testResult!.error ?? 'Bağlanılamadı',
+                              ? 'Baglanildi (${_testResult!.rttMs} ms)${_testResult!.serverName != null ? " — ${_testResult!.serverName}" : ""}'
+                              : _testResult!.error ?? 'Baglanilamadi',
                           style: TextStyle(
                             color: _testResult!.ok
                                 ? Colors.greenAccent
@@ -815,7 +638,7 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
                   const Spacer(),
                   TextButton(
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('İptal',
+                    child: const Text('Iptal',
                         style: TextStyle(color: Colors.white70)),
                   ),
                   const SizedBox(width: 8),
@@ -823,7 +646,7 @@ class _ServerFormDialogState extends State<_ServerFormDialog> {
                     style: FilledButton.styleFrom(
                         backgroundColor: const Color(0xFF5865F2)),
                     onPressed: _save,
-                    child: Text(isEdit ? 'Güncelle' : 'Kaydet'),
+                    child: Text(isEdit ? 'Guncelle' : 'Kaydet'),
                   ),
                 ],
               ),

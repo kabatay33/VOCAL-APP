@@ -261,16 +261,35 @@ class Storage {
     await p.setInt(_kLastUpdateCheck, timestamp);
   }
 
-  // playit.gg secret key
-  static const _kPlayitSecretKey = 'playit_secret_key';
+  // Radmin VPN sunucu bilgisi (host sunucu icin)
+  static const _kRadminServerHost = 'radmin_server_host';
+  static const _kRadminServerNickname = 'radmin_server_nickname';
 
-  static Future<String?> getPlayitSecretKey() async {
+  static Future<String?> getRadminServerHost() async {
     final p = await SharedPreferences.getInstance();
-    return p.getString(_kPlayitSecretKey);
+    return p.getString(_kRadminServerHost);
   }
 
-  static Future<void> setPlayitSecretKey(String key) async {
+  static Future<void> setRadminServerHost(String? host) async {
     final p = await SharedPreferences.getInstance();
-    await p.setString(_kPlayitSecretKey, key);
+    if (host == null) {
+      await p.remove(_kRadminServerHost);
+    } else {
+      await p.setString(_kRadminServerHost, host);
+    }
+  }
+
+  static Future<String?> getRadminServerNickname() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_kRadminServerNickname);
+  }
+
+  static Future<void> setRadminServerNickname(String? nickname) async {
+    final p = await SharedPreferences.getInstance();
+    if (nickname == null) {
+      await p.remove(_kRadminServerNickname);
+    } else {
+      await p.setString(_kRadminServerNickname, nickname);
+    }
   }
 }

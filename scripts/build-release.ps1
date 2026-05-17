@@ -68,32 +68,27 @@ if (Test-Path $updaterBuildDir) {
 }
 
 # 2.5) Updater dosyalarini release'e kopyala (ONCE, before main app build)
-# Not: Ana app build edildikten sonra updater build klasoru kirletilebilir
 $updaterReleaseDir = Join-Path $releaseDir "updater"
 New-Item -ItemType Directory -Force -Path $updaterReleaseDir | Out-Null
 
 if (Test-Path $updaterBuildDir) {
-  # Sadece updater'a ait dosyalar� kopyala
   $updaterExeSrc = Join-Path $updaterBuildDir "vocal_updater.exe"
   if (Test-Path $updaterExeSrc) {
     Copy-Item -Path $updaterExeSrc -Destination (Join-Path $updaterReleaseDir "updater.exe") -Force
   }
-  # flutter_windows.dll
   $dllSrc = Join-Path $updaterBuildDir "flutter_windows.dll"
   if (Test-Path $dllSrc) {
     Copy-Item -Path $dllSrc -Destination (Join-Path $updaterReleaseDir "flutter_windows.dll") -Force
   }
-  # icudtl.dat
   $icuSrc = Join-Path $updaterBuildDir "icudtl.dat"
   if (Test-Path $icuSrc) {
     Copy-Item -Path $icuSrc -Destination (Join-Path $updaterReleaseDir "icudtl.dat") -Force
   }
-  # data/ klasoru
   $dataSrc = Join-Path $updaterBuildDir "data"
   if (Test-Path $dataSrc) {
     Copy-Item -Path $dataSrc -Destination "$updaterReleaseDir\data" -Recurse -Force
   }
-  Write-Host "updater/ klasoru release'e kopyaland� (�nceden)"
+  Write-Host "updater/ klasoru release'e kopyaland�"
 } else {
   Write-Warning "updater build bulunamad�: $updaterBuildDir"
 }
@@ -116,28 +111,18 @@ if (-not (Test-Path $releaseDir)) {
   exit 1
 }
 
-# 4) playit.exe kopyala
-$playitSrc = Join-Path $projectRoot "flutter_app\windows\tunnel_native\playit\playit.exe"
-$playitDst = Join-Path $releaseDir "playit.exe"
-if (Test-Path $playitSrc) {
-  Copy-Item -Path $playitSrc -Destination $playitDst -Force
-  Write-Host "playit.exe kopyaland�"
-} else {
-  Write-Warning "playit.exe bulunamad�: $playitSrc"
-}
-
-# 5) version.txt yaz
+# 4) version.txt yaz
 Set-Content -Path "$releaseDir\version.txt" -Value "$Version" -NoNewline
 Write-Host "version.txt: $Version"
 
-# 6) Zip olustur
+# 5) Zip olustur
 Write-Host "`nZip olusturuluyor: $zipOut"
 if (Test-Path $zipOut) { Remove-Item $zipOut -Force }
 Compress-Archive -Path "$releaseDir\*" -DestinationPath $zipOut -Force
 $zipSize = [math]::Round((Get-Item $zipOut).Length / 1MB, 2)
 Write-Host "Zip hazir: $zipSize MB"
 
-# 7) GitHub release olustur
+# 6) GitHub release olustur
 Write-Host "`nGitHub Release olusturuluyor: v$Version"
 $ghArgs = @(
   'release', 'create',

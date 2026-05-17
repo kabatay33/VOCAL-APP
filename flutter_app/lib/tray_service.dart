@@ -116,7 +116,7 @@ class TrayService extends TrayListener with WindowListener {
     await windowManager.setPreventClose(false);
     // Yan servisleri temiz kapat — backend node process ve cloudflared
     try {
-      await TunnelService.instance.stop();
+      // Tunnel service artik playit degil, Radmin VPN kontrolu yapilmaz
     } catch (_) {}
     try {
       await BackendProcessService.instance.stop();

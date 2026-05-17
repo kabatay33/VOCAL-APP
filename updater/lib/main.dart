@@ -6,6 +6,9 @@ import 'package:flutter/material.dart';
 const String githubOwner = 'kabatay33';
 const String githubRepo = 'VOCAL-APP';
 
+// Radmin VPN yolu
+const String radminVpnPath = r'C:\Program Files (x86)\Radmin VPN\RvRvpnGui.exe';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const UpdaterApp());
@@ -82,19 +85,28 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _run());
   }
 
+  /// Install directory: updater/ alt klasöründeyse üst klasöre, değilsek olduğumuz yere
   String get _installDir {
-    // Updater alt klasöründe çalışıyor (release/updater/), ana uygulama üst klasörde
     final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final parentDir = Directory(exeDir).parent?.path;
-    // Eğer updater/ alt klasöründeysek üst klasöre git, değilsek olduğumuz yer
-    if (parentDir != null && File('$parentDir\\discord_clone.exe').existsSync()) {
-      return parentDir;
+    // updater/ alt klasöründeysek üst klasöre git
+    if (exeDir.endsWith('\\updater') || exeDir.endsWith('/updater')) {
+      final parentDir = Directory(exeDir).parent?.path;
+      if (parentDir != null) return parentDir;
+    }
+    // Ana dizindeyse ve updater/ varsa onu kullan
+    final updaterSubDir = '$exeDir\\updater';
+    if (Directory(updaterSubDir).existsSync()) {
+      return exeDir; // Ana dizin, discord_clone.exe burada
     }
     return exeDir;
   }
 
   Future<void> _run() async {
     try {
+      // 1. Radmin VPN kontrolü ve başlatma
+      await _ensureRadminVpn();
+
+      // 2. Versiyon kontrolü
       _currentVersion = _readVersion();
       setState(() {
         _status = 'Mevcut sürüm: ${_currentVersion ?? "bilinmiyor"}\nGitHub kontrol ediliyor...';
@@ -185,6 +197,29 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
       });
       await Future.delayed(const Duration(seconds: 2));
       _launchAndExit();
+    }
+  }
+
+  /// Radmin VPN'ın çalıştığını kontrol et, çalışmıyorsa başlat
+  Future<void> _ensureRadminVpn() async {
+    try {
+      // Radmin VPN çalışıyor mu?
+      if (_isRunning('RvRvpnGui.exe')) {
+        debugPrint('[UPDATER] Radmin VPN zaten çalışıyor');
+        return;
+      }
+      // Radmin VPN başlat
+      final radminExe = File(radminVpnPath);
+      if (await radminExe.exists()) {
+        debugPrint('[UPDATER] Radmin VPN başlatılıyor...');
+        Process.start(radminVpnPath, [], mode: ProcessStartMode.detached, runInShell: false);
+        // Başlaması için biraz bekle
+        await Future.delayed(const Duration(seconds: 3));
+      } else {
+        debugPrint('[UPDATER] Radmin VPN bulunamadı: $radminVpnPath');
+      }
+    } catch (e) {
+      debugPrint('[UPDATER] Radmin VPN başlatma hatası: $e');
     }
   }
 
@@ -281,17 +316,6 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
                         fontSize: 13,
                       ),
                     ),
-                    const SizedBox(height: 20),
-                    if (_state == _State.upToDate || _state == _State.done)
-                      FilledButton.icon(
-                        onPressed: _launchAndExit,
-                        icon: const Icon(Icons.play_arrow, size: 18),
-                        label: const Text('Uygulamayı Başlat'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF5865F2),
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                        ),
-                      ),
                   ],
                 ),
               ),
