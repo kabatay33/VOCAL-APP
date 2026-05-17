@@ -67,6 +67,8 @@ if (Test-Path $updaterBuildDir) {
   if (Test-Path $updaterFlutterAssets) {
     Copy-Item -Path $updaterFlutterAssets -Destination (Join-Path $destData 'flutter_assets') -Recurse -Force
   }
+  # icudtl.dat Flutter build'de updaterBuildDir'a kopyalanir
+  # (CMake install basarisiz olsa bile bu dosya oradadir)
   Write-Host "Updater build dosyalar� kopyaland� (temiz)"
 }
 
