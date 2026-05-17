@@ -7,6 +7,7 @@ const String githubOwner = 'kabatay33';
 const String githubRepo = 'VOCAL-APP';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const UpdaterApp());
 }
 
@@ -81,7 +82,16 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _run());
   }
 
-  String get _installDir => File(Platform.resolvedExecutable).parent.path;
+  String get _installDir {
+    // Updater alt klasöründe çalışıyor (release/updater/), ana uygulama üst klasörde
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final parentDir = Directory(exeDir).parent?.path;
+    // Eğer updater/ alt klasöründeysek üst klasöre git, değilsek olduğumuz yer
+    if (parentDir != null && File('$parentDir\\discord_clone.exe').existsSync()) {
+      return parentDir;
+    }
+    return exeDir;
+  }
 
   Future<void> _run() async {
     try {

@@ -4281,7 +4281,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           const SizedBox(height: 20),
           _label('UYGULAMA SÜRÜMÜ'),
           const SizedBox(height: 8),
-          _label('Güncelleme için updater.exe kullanın'),
+          _label('Güncelleme için updater/updater.exe kullanın'),
         ],
       ),
     );
