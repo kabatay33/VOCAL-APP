@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 const String githubOwner = 'kabatay33';
 const String githubRepo = 'VOCAL-APP';
@@ -228,7 +229,10 @@ class _UpdaterScreenState extends State<UpdaterScreen> {
     if (File(exePath).existsSync()) {
       Process.start(exePath, [], mode: ProcessStartMode.detached, runInShell: false);
     }
-    exit(0);
+    // Önce Flutter penceresini kapat, sonra exit
+    SystemNavigator.pop();
+    // 1 saniye sonra zorla çık (SystemNavigator.pop yeterli olmazsa)
+    Future.delayed(const Duration(seconds: 1), () => exit(0));
   }
 
   @override
