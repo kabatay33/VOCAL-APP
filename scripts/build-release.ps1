@@ -34,7 +34,7 @@ if ($pubspec -match 'version:\s+(\d+\.\d+\.\d+)\+(\d+)') {
   Write-Host "pubspec.yaml: version $Version+$newBuild olarak guncellendi"
 }
 
-# 2) Updater build (once, before main app)
+# 2) Updater build
 Write-Host "`nUpdater build aliniyor..."
 $updaterBuildDir = Join-Path $updaterDir 'build\windows\x64\runner\Release'
 $updaterNativeAssets = Join-Path $updaterDir 'build\native_assets\windows'
@@ -67,6 +67,37 @@ if (Test-Path $updaterBuildDir) {
   Write-Host "Updater build dosyalar� kopyaland�"
 }
 
+# 2.5) Updater dosyalarini release'e kopyala (ONCE, before main app build)
+# Not: Ana app build edildikten sonra updater build klasoru kirletilebilir
+$updaterReleaseDir = Join-Path $releaseDir "updater"
+New-Item -ItemType Directory -Force -Path $updaterReleaseDir | Out-Null
+
+if (Test-Path $updaterBuildDir) {
+  # Sadece updater'a ait dosyalar� kopyala
+  $updaterExeSrc = Join-Path $updaterBuildDir "vocal_updater.exe"
+  if (Test-Path $updaterExeSrc) {
+    Copy-Item -Path $updaterExeSrc -Destination (Join-Path $updaterReleaseDir "updater.exe") -Force
+  }
+  # flutter_windows.dll
+  $dllSrc = Join-Path $updaterBuildDir "flutter_windows.dll"
+  if (Test-Path $dllSrc) {
+    Copy-Item -Path $dllSrc -Destination (Join-Path $updaterReleaseDir "flutter_windows.dll") -Force
+  }
+  # icudtl.dat
+  $icuSrc = Join-Path $updaterBuildDir "icudtl.dat"
+  if (Test-Path $icuSrc) {
+    Copy-Item -Path $icuSrc -Destination (Join-Path $updaterReleaseDir "icudtl.dat") -Force
+  }
+  # data/ klasoru
+  $dataSrc = Join-Path $updaterBuildDir "data"
+  if (Test-Path $dataSrc) {
+    Copy-Item -Path $dataSrc -Destination "$updaterReleaseDir\data" -Recurse -Force
+  }
+  Write-Host "updater/ klasoru release'e kopyaland� (�nceden)"
+} else {
+  Write-Warning "updater build bulunamad�: $updaterBuildDir"
+}
+
 # 3) Ana Flutter release build
 Write-Host "`nFlutter Windows release build aliniyor..."
 Push-Location $flutterDir
@@ -95,48 +126,25 @@ if (Test-Path $playitSrc) {
   Write-Warning "playit.exe bulunamad�: $playitSrc"
 }
 
-# 5) Updater'� alt klas�re kopyala (DLL ve data �ak���mas�n� �nle)
-$updaterReleaseDir = Join-Path $releaseDir "updater"
-New-Item -ItemType Directory -Force -Path $updaterReleaseDir | Out-Null
-
-if (Test-Path $updaterBuildDir) {
-  Get-ChildItem $updaterBuildDir -File | ForEach-Object {
-    Copy-Item -Path $_.FullName -Destination (Join-Path $updaterReleaseDir $_.Name) -Force
-  }
-  $dataSrc = Join-Path $updaterBuildDir "data"
-  if (Test-Path $dataSrc) {
-    Copy-Item -Path $dataSrc -Destination "$updaterReleaseDir\data" -Recurse -Force
-  }
-  $exeSrc = Join-Path $updaterReleaseDir "vocal_updater.exe"
-  $exeDst = Join-Path $updaterReleaseDir "updater.exe"
-  if (Test-Path $exeSrc) {
-    if (Test-Path $exeDst) { Remove-Item $exeDst -Force }
-    Rename-Item -Path $exeSrc -NewName "updater.exe" -Force
-  }
-  Write-Host "updater/ klas�r� kopyaland�"
-} else {
-  Write-Warning "updater build bulunamad�: $updaterBuildDir"
-}
-
-# 6) version.txt yaz
+# 5) version.txt yaz
 Set-Content -Path "$releaseDir\version.txt" -Value "$Version" -NoNewline
 Write-Host "version.txt: $Version"
 
-# 7) Zip olustur
+# 6) Zip olustur
 Write-Host "`nZip olusturuluyor: $zipOut"
 if (Test-Path $zipOut) { Remove-Item $zipOut -Force }
 Compress-Archive -Path "$releaseDir\*" -DestinationPath $zipOut -Force
 $zipSize = [math]::Round((Get-Item $zipOut).Length / 1MB, 2)
 Write-Host "Zip hazir: $zipSize MB"
 
-# 8) GitHub release olustur
+# 7) GitHub release olustur
 Write-Host "`nGitHub Release olusturuluyor: v$Version"
 $ghArgs = @(
   'release', 'create',
   "v$Version",
   $zipOut,
   '--title', "VOCAL-APP v$Version",
-  '--notes', "VOCAL-APP v$Version`n`nYenilikler:`n- Updater GUI duzeltmesi (ayri klasor, DLL/data carpisma duzeltmesi)`n- Cloudflare kaldirildi, sadece playit.gg`n- Backend hazir olunca splash ekrani`n- Update loop duzeltmesi"
+  '--notes', "VOCAL-APP v$Version"
 )
 
 & gh @ghArgs
