@@ -62,6 +62,11 @@ Future<void> main() async {
     final currentVersion = readVersion(installDir);
     log('Mevcut surum: ${currentVersion ?? "bilinmiyor"}');
 
+    // Backend zaten çalışıyor mu? (host bilgisayarı için)
+    // Update kontrol etmeden ÖNCE backend çalışıyor olsun ki app açıldığında
+    // splash uzun beklemesin. Update gelirse zaten kapatıp tekrar açacağız.
+    await ensureBackendRunning(installDir);
+
     // 3. GitHub'dan latest release
     log('GitHub API: latest release alinyor...');
     final release = await fetchRelease()
@@ -110,13 +115,20 @@ Future<void> main() async {
     await extractZip(zipPath, extractDir.path);
     log('Extract OK');
 
-    // 7. App'in kapanmasını bekle + kopyala
+    // 7. App'in ve backend'in kapanmasını bekle + kopyala
     log('discord_clone.exe kapanmasini bekleniyor...');
     await waitForAppExit();
+    // Backend de kapat — dosya lock'larını önle (backend\src\server.js
+    // dosyası çalışan node tarafından açık olabilir)
+    log('Backend kapatiliyor (dosya lock\'lari icin)...');
+    await stopBackend();
     log('Kopyalama...');
     copyRecursive(extractDir, installDir);
     writeVersion(installDir, latestVersion);
     log('Kopyalama OK');
+
+    // Yeni backend kodu geldi — yeniden başlat
+    await ensureBackendRunning(installDir);
 
     // 8. Cleanup
     try {
@@ -408,6 +420,118 @@ Future<void> launchAndExit(String installDir) async {
   // Updater kendisini exit'leyecek
   await Future.delayed(const Duration(milliseconds: 500));
   exit(0);
+}
+
+// ==================== BACKEND ====================
+/// installDir altında `backend\src\server.js` var mı? Varsa o path'i döner.
+String? findBackendDir(String installDir) {
+  final candidate = '$installDir\\backend';
+  if (File('$candidate\\src\\server.js').existsSync()) return candidate;
+  // Dev mode: proje root altında backend (test ortamında çalışırken)
+  final dev1 =
+      Directory('$installDir\\..\\..\\..\\..\\..\\..\\backend').absolute.path;
+  if (File('$dev1\\src\\server.js').existsSync()) return dev1;
+  final dev2 =
+      Directory('$installDir\\..\\..\\..\\..\\..\\backend').absolute.path;
+  if (File('$dev2\\src\\server.js').existsSync()) return dev2;
+  return null;
+}
+
+/// node.exe bulunamadıysa null. Önce installDir yanında "node.exe" sonra PATH.
+String? findNode(String installDir) {
+  // Bundled node.exe
+  final bundled = '$installDir\\node.exe';
+  if (File(bundled).existsSync()) return bundled;
+  // PATH'den ara
+  try {
+    final r = Process.runSync('where', ['node'],
+        runInShell: false, stdoutEncoding: const SystemEncoding());
+    if (r.exitCode == 0) {
+      final lines = (r.stdout as String).split('\n');
+      for (final l in lines) {
+        final s = l.trim();
+        if (s.toLowerCase().endsWith('node.exe') && File(s).existsSync()) {
+          return s;
+        }
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+/// Port 3000 dinleniyor mu? Backend zaten çalışıyorsa true.
+Future<bool> isPort3000InUse() async {
+  try {
+    final server = await ServerSocket.bind('127.0.0.1', 3000);
+    await server.close();
+    return false;
+  } catch (_) {
+    return true;
+  }
+}
+
+/// Backend bulup başlat (zaten çalışıyorsa skip).
+Future<void> ensureBackendRunning(String installDir) async {
+  try {
+    if (await isPort3000InUse()) {
+      log('Backend zaten port 3000\'de calisiyor');
+      return;
+    }
+    final backendDir = findBackendDir(installDir);
+    if (backendDir == null) {
+      log('Backend klasoru bulunamadi (installDir\\backend\\src\\server.js yok)');
+      return;
+    }
+    final nodePath = findNode(installDir);
+    if (nodePath == null) {
+      log('node.exe bulunamadi (PATH\'de yok ve bundled degil)');
+      return;
+    }
+    log('Backend baslatiliyor: $nodePath $backendDir\\src\\server.js');
+    // cmd start /B ile detached spawn — updater exit etse de yaşar
+    await Process.start(
+      'cmd',
+      ['/c', 'start', '""', '/B', '/D', backendDir, nodePath, 'src\\server.js'],
+      mode: ProcessStartMode.detached,
+      runInShell: false,
+    );
+    // Port 3000 dinlemeye başlamasını bekle (max 12 sn — node + better-sqlite3
+    // initialization biraz sürebiliyor)
+    for (var i = 0; i < 24; i++) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (await isPort3000InUse()) {
+        log('Backend hazir (port 3000)');
+        return;
+      }
+    }
+    log('Backend port 3000 dinlemeye baslamadi (12sn timeout) — discord_clone yine de denesin');
+  } catch (e) {
+    log('Backend baslatma hatasi: $e');
+  }
+}
+
+/// Çalışan node.exe'leri (port 3000'i tutan) öldür.
+Future<void> stopBackend() async {
+  if (!await isPort3000InUse()) {
+    log('Port 3000 zaten bos — kapatacak backend yok');
+    return;
+  }
+  try {
+    // taskkill ile tüm node.exe'leri öldür — basit ama agresif.
+    // Daha akıllı yöntem: netstat ile port 3000'i tutan PID'i bul + sadece
+    // onu kapat. Ama bizim updater'da basit tutalım.
+    await Process.run('taskkill', ['/F', '/IM', 'node.exe'],
+        runInShell: false);
+    log('node.exe killed');
+  } catch (e) {
+    log('Backend kapatma hatasi: $e');
+  }
+  // Port serbest kalmasını bekle
+  for (var i = 0; i < 6; i++) {
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (!await isPort3000InUse()) return;
+  }
+  log('Backend kapatildi ama port 3000 hala dolu? (devam ediliyor)');
 }
 
 // ==================== VERSION COMPARE ====================

@@ -8,8 +8,8 @@
 #   1) pubspec.yaml'da version'u gunceller
 #   2) Updater (dart compile) build alir -> updater.exe
 #   3) Flutter Windows release build alir
-#   4) updater.exe'yi Release\updater\ icine kopyalar
-#   5) version.txt'i Release\ icine yazar
+#   4) Backend prod deps'lerini hazirlar (npm install --omit=dev)
+#   5) updater.exe + backend + version.txt'i Release\ icine kopyalar
 #   6) Release klasorunu zip'ler -> dist\VOCAL-APP-X.Y.Z.zip
 #   7) gh release create ile GitHub'a yayinlar
 #
@@ -35,6 +35,7 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 $projectRoot = (Get-Item $PSScriptRoot).Parent.FullName
 $flutterDir = Join-Path $projectRoot 'flutter_app'
 $updaterDir = Join-Path $projectRoot 'updater'
+$backendDir = Join-Path $projectRoot 'backend'
 $releaseDir = Join-Path $flutterDir 'build\windows\x64\runner\Release'
 $distDir = Join-Path $projectRoot 'dist'
 $zipOut = Join-Path $distDir "VOCAL-APP-$Version.zip"
@@ -91,12 +92,50 @@ if (-not (Test-Path $releaseDir)) {
   exit 1
 }
 
-# 4) updater.exe Release\updater\ icine kopyalanir
-Write-Host "`n[4/7] updater.exe Release klasorune kopyalaniyor..."
+# 4) Backend prod deps + bundle
+Write-Host "`n[4/7] Backend bundle hazirlaniyor..."
+# 4a) updater.exe Release\updater\ icine
 $updaterDest = Join-Path $releaseDir "updater"
 if (Test-Path $updaterDest) { Remove-Item $updaterDest -Recurse -Force }
 New-Item -ItemType Directory -Path $updaterDest | Out-Null
 Copy-Item (Join-Path $updaterDir "build\updater.exe") $updaterDest
+Write-Host "  updater.exe OK"
+
+# 4b) backend prod deps install + Release\backend\ icine kopyala
+Push-Location $backendDir
+try {
+  # npm ci/install prod deps — node_modules'u prod-only yap
+  if (-not (Test-Path "$backendDir\node_modules") -or
+      ((Get-Item "$backendDir\package.json").LastWriteTime -gt
+       (Get-Item "$backendDir\node_modules").LastWriteTime)) {
+    Write-Host "  npm install --omit=dev calistiriliyor..."
+    & npm install --omit=dev 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Error "npm install basarisiz"
+      exit 1
+    }
+  }
+} finally {
+  Pop-Location
+}
+
+$backendDest = Join-Path $releaseDir "backend"
+if (Test-Path $backendDest) { Remove-Item $backendDest -Recurse -Force }
+New-Item -ItemType Directory -Path $backendDest | Out-Null
+
+# Yalniz gerekli olanlar:
+Copy-Item "$backendDir\src" "$backendDest\src" -Recurse -Force
+Copy-Item "$backendDir\package.json" $backendDest -Force
+if (Test-Path "$backendDir\package-lock.json") {
+  Copy-Item "$backendDir\package-lock.json" $backendDest -Force
+}
+Copy-Item "$backendDir\node_modules" "$backendDest\node_modules" -Recurse -Force
+# uploads klasoru bos baslat (varsa)
+if (-not (Test-Path "$backendDest\uploads")) {
+  New-Item -ItemType Directory -Path "$backendDest\uploads" | Out-Null
+}
+$backendSize = (Get-ChildItem $backendDest -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+Write-Host "  backend bundle: $($backendSize.ToString('F1')) MB"
 
 # 5) version.txt
 Write-Host "`n[5/7] version.txt yaziliyor: $Version"
