@@ -7,27 +7,57 @@
 
 // --- Single Instance Enforcement ---
 // Uygulamanın yalnızca bir kopyasının çalışmasını sağlar.
-// İkinci kopya başlatılırsa mevcut pencere öne getirilir.
+// İkinci kopya başlatılırsa mevcut pencere ön plana getirilir.
+// Pencere tray'de gizliyse (hidden) de görünür hale getirir.
 static bool BringExistingInstanceToFront() {
   // Flutter Windows runner'ın kayıtlı pencere sınıfı adı
   const wchar_t* kFlutterClass = L"FLUTTER_RUNNER_WIN32_WINDOW";
   HWND hwnd = ::FindWindowW(kFlutterClass, nullptr);
   if (hwnd == nullptr) return false;
 
-  // Simge durumundaysa geri yükle
+  // 1) Tray'e gizlenmis pencereyi gorunur yap (SW_HIDE -> SW_SHOW)
+  if (!::IsWindowVisible(hwnd)) {
+    ::ShowWindow(hwnd, SW_SHOW);
+  }
+
+  // 2) Simge durumundaysa geri yukle (minimized)
   if (::IsIconic(hwnd)) {
     ::ShowWindow(hwnd, SW_RESTORE);
   }
-  // Ön plana getir
+
+  // 3) Pencereyi ön plana getir — Windows foreground stealing korumasini
+  // bypass etmek için AttachThreadInput trigi: hedef pencerenin thread
+  // input'una baglanip SetForegroundWindow cagir, sonra cozul.
+  DWORD foregroundThread =
+      ::GetWindowThreadProcessId(::GetForegroundWindow(), nullptr);
+  DWORD targetThread = ::GetWindowThreadProcessId(hwnd, nullptr);
+  DWORD currentThread = ::GetCurrentThreadId();
+
+  bool attached1 = false, attached2 = false;
+  if (foregroundThread != currentThread) {
+    attached1 = ::AttachThreadInput(currentThread, foregroundThread, TRUE);
+  }
+  if (targetThread != currentThread && targetThread != foregroundThread) {
+    attached2 = ::AttachThreadInput(currentThread, targetThread, TRUE);
+  }
+
+  ::BringWindowToTop(hwnd);
   ::SetForegroundWindow(hwnd);
-  // Flash/highlight
-  FLASHWINFO fi{};
-  fi.cbSize = sizeof(fi);
-  fi.hwnd = hwnd;
-  fi.dwFlags = FLASHW_TRAY;
-  fi.uCount = 3;
-  fi.dwTimeout = 0;
-  ::FlashWindowEx(&fi);
+  ::SetFocus(hwnd);
+
+  if (attached1) ::AttachThreadInput(currentThread, foregroundThread, FALSE);
+  if (attached2) ::AttachThreadInput(currentThread, targetThread, FALSE);
+
+  // 4) Eger hala arka plandaysa flash ile dikkat cek
+  if (::GetForegroundWindow() != hwnd) {
+    FLASHWINFO fi{};
+    fi.cbSize = sizeof(fi);
+    fi.hwnd = hwnd;
+    fi.dwFlags = FLASHW_TRAY | FLASHW_TIMERNOFG;
+    fi.uCount = 5;
+    fi.dwTimeout = 0;
+    ::FlashWindowEx(&fi);
+  }
   return true;
 }
 
