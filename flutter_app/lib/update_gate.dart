@@ -256,72 +256,121 @@ class _UpdateGateState extends State<UpdateGate>
     }
   }
 
-  /// PowerShell ile mevcut process'i bekleyip dosyaları kopyalayan +
-  /// uygulamayı yeniden başlatan bir script spawn et.
+  /// Batch (.cmd) file spawn ederek mevcut process'i bekler, robocopy ile
+  /// dosyaları kopyalar, yeni exe'yi başlatır. Batch dosyası kullanmamızın
+  /// sebebi: PowerShell ExecutionPolicy bazı sistemlerde imzasız .ps1
+  /// dosyalarını sessizce blokluyor; .cmd dosyalarında bu sorun yok.
+  /// Tüm aşamalar %TEMP%\LocalHub_apply.log dosyasına yazılır.
   Future<bool> _spawnApplyScript(
       String srcDir, String installDir, String newVersion) async {
     try {
       final currentPid = pid; // dart:io top-level
       const exeName = 'LocalHub.exe';
       final ts = DateTime.now().millisecondsSinceEpoch;
-      final scriptPath =
-          '${Directory.systemTemp.path}${Platform.pathSeparator}LocalHub_apply_$ts.ps1';
+      final tempDir = Directory.systemTemp.path;
+      final scriptPath = '$tempDir${Platform.pathSeparator}LocalHub_apply_$ts.cmd';
+      final logPath = '$tempDir${Platform.pathSeparator}LocalHub_apply.log';
 
-      // PowerShell apply script
+      // CMD batch script — execution policy sorunu yok, robocopy ile güvenilir
+      // Dikkat: batch'te % işareti %% olarak escape edilir.
       final script = '''
-\$ErrorActionPreference = "SilentlyContinue"
-# Mevcut process bitsin
-try { Wait-Process -Id $currentPid -Timeout 30 } catch {}
-Start-Sleep -Milliseconds 600
+@echo off
+setlocal enableextensions
+set "LOG=$logPath"
+set "SRC=$srcDir"
+set "DST=$installDir"
+set "OLDPID=$currentPid"
+set "EXE=$exeName"
+set "NEWVER=$newVersion"
 
-\$src = "$srcDir"
-\$dst = "$installDir"
+echo === LocalHub Apply Script === > "%LOG%"
+echo Baslangic: %DATE% %TIME% >> "%LOG%"
+echo SRC=%SRC% >> "%LOG%"
+echo DST=%DST% >> "%LOG%"
+echo OLDPID=%OLDPID% >> "%LOG%"
+echo NEWVER=%NEWVER% >> "%LOG%"
 
-# Tüm yeni dosyaları install dir'e kopyala (recursive, force overwrite)
-Get-ChildItem -Path \$src -Recurse | ForEach-Object {
-    \$rel = \$_.FullName.Substring(\$src.Length).TrimStart("\\","/")
-    \$target = Join-Path \$dst \$rel
-    if (\$_.PSIsContainer) {
-        if (-not (Test-Path \$target)) {
-            New-Item -ItemType Directory -Path \$target -Force | Out-Null
-        }
-    } else {
-        \$targetDir = Split-Path \$target -Parent
-        if (-not (Test-Path \$targetDir)) {
-            New-Item -ItemType Directory -Path \$targetDir -Force | Out-Null
-        }
-        Copy-Item -Path \$_.FullName -Destination \$target -Force
-    }
-}
+REM Mevcut process bitsin — taskkill timeout dongusu (max 60sn)
+set /a TRY=0
+:WAITLOOP
+tasklist /FI "PID eq %OLDPID%" /NH 2>nul | findstr /I "%EXE%" >nul
+if errorlevel 1 goto AFTERWAIT
+set /a TRY+=1
+if %TRY% GEQ 60 (
+    echo [UYARI] PID %OLDPID% 60sn icinde kapanmadi, taskkill deneniyor >> "%LOG%"
+    taskkill /F /PID %OLDPID% >> "%LOG%" 2>&1
+    timeout /t 2 /nobreak >nul
+    goto AFTERWAIT
+)
+timeout /t 1 /nobreak >nul
+goto WAITLOOP
 
-# version.txt güncelle
-Set-Content -Path (Join-Path \$dst "version.txt") -Value "$newVersion" -NoNewline -Encoding ASCII
+:AFTERWAIT
+echo Process kapandi (TRY=%TRY%). Dosyalar kopyalaniyor... >> "%LOG%"
+timeout /t 1 /nobreak >nul
 
-# Uygulamayı yeniden başlat
-\$exe = Join-Path \$dst "$exeName"
-if (Test-Path \$exe) {
-    Start-Process -FilePath \$exe -WorkingDirectory \$dst
-}
+REM Robocopy: /E recursive (bos klasorler dahil), /IS include same files,
+REM /IT include tweaked, /R:3 retry 3, /W:2 wait 2sn, /NFL /NDL kisa log
+robocopy "%SRC%" "%DST%" /E /IS /IT /R:3 /W:2 /NFL /NDL /NJH /NJS >> "%LOG%" 2>&1
+set RC=%ERRORLEVEL%
+echo Robocopy exit code: %RC% >> "%LOG%"
 
-# Self-cleanup (script + staging)
-try { Remove-Item -Path "$srcDir" -Recurse -Force -ErrorAction SilentlyContinue } catch {}
-Start-Sleep -Milliseconds 400
-Remove-Item -Path \$MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+REM Robocopy exit codes: 0-7 basarili, 8+ hatali
+if %RC% GEQ 8 (
+    echo [HATA] Robocopy basarisiz (kod %RC%) >> "%LOG%"
+    goto END
+)
+
+REM version.txt yaz
+echo|set /p="%NEWVER%" > "%DST%\\version.txt"
+echo version.txt yazildi: %NEWVER% >> "%LOG%"
+
+REM Yeni exe'yi baslat
+if exist "%DST%\\%EXE%" (
+    echo Yeni exe baslatiliyor: %DST%\\%EXE% >> "%LOG%"
+    start "" /D "%DST%" "%DST%\\%EXE%"
+    echo Baslatildi: %DATE% %TIME% >> "%LOG%"
+) else (
+    echo [HATA] Yeni exe bulunamadi: %DST%\\%EXE% >> "%LOG%"
+)
+
+:END
+echo === Apply tamamlandi: %DATE% %TIME% === >> "%LOG%"
+
+REM Cleanup: staging klasoru + bu script
+timeout /t 2 /nobreak >nul
+rmdir /S /Q "%SRC%" 2>nul
+(goto) 2>nul & del "%~f0"
 ''';
       File(scriptPath).writeAsStringSync(script);
+      debugPrint('[UpdateGate] Apply script yazildi: $scriptPath');
+      debugPrint('[UpdateGate] Apply log dosyasi: $logPath');
 
-      // PowerShell'i invisible olarak başlat (DETACHED + CREATE_NO_WINDOW)
-      // detached: parent öldükten sonra da çalışmaya devam etsin
-      final result = await Process.start(
-        'powershell',
-        ['-NoProfile', '-WindowStyle', 'Hidden', '-File', scriptPath],
+      // CMD'yi DETACHED olarak başlat — Dart Process.start detached mode
+      // CREATE_NEW_PROCESS_GROUP + DETACHED_PROCESS Win32 flag'larini
+      // ekler, parent öldükten sonra çocuk çalışmaya devam eder.
+      final proc = await Process.start(
+        'cmd.exe',
+        ['/c', scriptPath],
         mode: ProcessStartMode.detached,
         runInShell: false,
       );
-      debugPrint('[UpdateGate] Apply script spawn PID: ${result.pid}');
+      debugPrint('[UpdateGate] Apply script spawn PID: ${proc.pid}');
+
+      // Spawn'in tetiklenmesi için kısa bir bekleme (script ilk satırı
+      // log'a yazmaya başlayabilsin)
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Verifikasyon: log dosyası oluşmuş mu?
+      if (File(logPath).existsSync()) {
+        debugPrint('[UpdateGate] Apply log dosyasi olusmus — script aktif');
+      } else {
+        debugPrint(
+            '[UpdateGate] UYARI: Apply log dosyasi yok — script baslatilamamis olabilir');
+      }
       return true;
-    } catch (e) {
-      debugPrint('[UpdateGate] Apply script spawn hatası: $e');
+    } catch (e, st) {
+      debugPrint('[UpdateGate] Apply script spawn hatası: $e\n$st');
       return false;
     }
   }
