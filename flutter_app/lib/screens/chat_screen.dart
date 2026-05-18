@@ -58,7 +58,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _connected = false;
   String? _wsError;
   ScreenShareOptions _shareOptions = ScreenShareOptions.defaults;
-  List<ServerInfo> _servers = [];
+  // _servers kaldirildi: sol sunucu sutunu artik yok; _activeServer yeterli.
   ServerInfo? _activeServer;
   List<UserProfile> _allUsers = [];
   Set<int> _onlineUserIds = {};
@@ -144,7 +144,6 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       active ??= servers.isNotEmpty ? servers.first : null;
       setState(() {
-        _servers = servers;
         _activeServer = active;
       });
       if (active != null) {
@@ -747,9 +746,9 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (ctx) => _SettingsDialog(
         token: _auth.token,
         username: _auth.username,
-        email: _auth.email,
         avatarUrl: _auth.avatarUrl,
         currentServer: Config.backendHost,
+        activeServer: _activeServer,
         voice: _voice,
         onLogout: _logout,
         onSaveServer: (newHost) async {
@@ -779,197 +778,46 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Future<void> _switchToServer(ServerInfo server) async {
-    if (server.id == _activeServer?.id) return; // zaten aktif
-    setState(() {
-      _activeServer = server;
-      _selectedChannel = null;
-      _messages.clear();
-      _voiceMembers.clear();
-    });
-    await Storage.setActiveServerId(server.id);
-    // Sesli kanaldaysak ayrıl (farklı sunucuya geçildi)
-    if (_voice.inVoice) {
-      await _leaveVoiceChannel();
-    }
-    await _loadChannels();
-    await _loadUsers();
-  }
+  // _switchToServer ve _openServerContextMenu kaldirildi: tek default sunucu var,
+  // sunucu ayarlari ayarlar dialog'undaki Sunucu sekmesinden acilir.
 
-  Future<void> _openAddServerDialog() async {
-    final result = await showDialog<ServerInfo>(
-      context: context,
-      builder: (ctx) => _AddServerDialog(token: _auth.token),
-    );
-    if (result == null) return;
-    setState(() => _servers = [..._servers, result]);
-    await _switchToServer(result);
-  }
+  // _openServerSettings kaldirildi: roller artik Ayarlar > Sunucu > Roller
+  // alt sekmesinden yonetiliyor.
 
-  Future<void> _openServerContextMenu(
-      Offset position, ServerInfo server) async {
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox?;
-    if (overlay == null) return;
-    final selected = await showMenu<String>(
-      context: context,
-      color: const Color(0xFF2F3136),
-      position: RelativeRect.fromRect(
-        Rect.fromLTWH(position.dx, position.dy, 0, 0),
-        Offset.zero & overlay.size,
-      ),
-      items: [
-        const PopupMenuItem(
-          value: 'invite',
-          child: Row(
-            children: [
-              Icon(Icons.key, size: 16, color: Colors.white70),
-              SizedBox(width: 8),
-              Text('Davet Kodunu Göster',
-                  style: TextStyle(color: Colors.white)),
-            ],
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'settings',
-          child: Row(
-            children: [
-              Icon(Icons.tune, size: 16, color: Colors.white70),
-              SizedBox(width: 8),
-              Text('Sunucu Ayarları',
-                  style: TextStyle(color: Colors.white)),
-            ],
-          ),
-        ),
-        if (!server.isOwner)
-          const PopupMenuItem(
-            value: 'leave',
-            child: Row(
-              children: [
-                Icon(Icons.logout, size: 16, color: Colors.redAccent),
-                SizedBox(width: 8),
-                Text('Sunucudan Ayrıl',
-                    style: TextStyle(color: Colors.redAccent)),
-              ],
-            ),
-          ),
-      ],
-    );
-    if (selected == 'invite') {
-      _showInviteCodeDialog(server);
-    } else if (selected == 'settings') {
-      await _openServerSettings(server);
-    } else if (selected == 'leave') {
-      await _leaveServer(server);
-    }
-  }
+  // _showInviteCodeDialog kaldirildi: davet kodu ozelligi tamamen kalktI.
 
-  Future<void> _openServerSettings(ServerInfo server) async {
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => ServerSettingsDialog(
-        token: _auth.token,
-        server: server,
-      ),
-    );
-    // Ayarlardan sonra üye/permission değişmiş olabilir; listeyi tazele
-    await _loadServers();
-  }
-
-  void _showInviteCodeDialog(ServerInfo server) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2F3136),
-        title: Text('${server.name} - Davet Kodu',
-            style: const TextStyle(color: Colors.white)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Bu kodu arkadaşlarınla paylaş, sunucuna katılabilsinler:',
-              style: TextStyle(color: Colors.white70),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF202225),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: SelectableText(
-                server.inviteCode,
-                style: const TextStyle(
-                  color: Color(0xFF5865F2),
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 2,
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Tamam'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _leaveServer(ServerInfo server) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2F3136),
-        title: Text('"${server.name}" sunucusundan ayrıl?',
-            style: const TextStyle(color: Colors.white)),
-        content: const Text(
-          'Tekrar katılmak için davet kodu gerekecek.',
-          style: TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('İptal'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Ayrıl'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    try {
-      await Api.leaveServer(_auth.token, server.id);
-      final updated = _servers.where((s) => s.id != server.id).toList();
-      setState(() => _servers = updated);
-      if (_activeServer?.id == server.id && updated.isNotEmpty) {
-        await _switchToServer(updated.first);
-      }
-    } catch (e) {
-      _showSnack('Hata: $e');
-    }
-  }
+  // _leaveServer kaldirildi: tek default sunucu var, ayrilmak anlamsiz.
 
   Future<void> _openCreateChannelDialog(String channelType) async {
-    final result = await showDialog<({String name, String type})>(
-      context: context,
-      builder: (ctx) => _ChannelCreateDialog(initialType: channelType),
-    );
-    if (result == null) return;
     final activeServer = _activeServer;
     if (activeServer == null) {
       _showSnack('Önce bir sunucu seç');
       return;
     }
+    // Rolleri once cek — kanal olusturma dialogunda her rol icin
+    // permission override secebilelim
+    List<Role> roles = [];
+    try {
+      roles = await Api.getServerRoles(_auth.token, activeServer.id);
+    } catch (_) {/* sessiz */}
+
+    if (!mounted) return;
+    final result = await showDialog<({String name, String type, List<ChannelRoleOverride> overrides})>(
+      context: context,
+      builder: (ctx) => _ChannelCreateDialog(
+        initialType: channelType,
+        roles: roles,
+      ),
+    );
+    if (result == null) return;
     try {
       await Api.createChannel(
-          _auth.token, activeServer.id, result.name, result.type);
+        _auth.token,
+        activeServer.id,
+        result.name,
+        result.type,
+        overrides: result.overrides,
+      );
       // WS broadcast otomatik olarak listeyi güncelleyecek
     } on ApiException catch (e) {
       _showSnack('Hata: ${e.message}');
@@ -1218,12 +1066,9 @@ class _ChatScreenState extends State<ChatScreen> {
         foregroundColor: Colors.white,
         title: Row(
           children: [
-            Text(
-              _selectedChannel == null
-                  ? '...'
-                  : (_selectedChannel!.isVoice
-                      ? '🔊 ${_selectedChannel!.name}'
-                      : '# ${_selectedChannel!.name}'),
+            const Text(
+              'LocalHub',
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(width: 12),
             Container(
@@ -1260,8 +1105,8 @@ class _ChatScreenState extends State<ChatScreen> {
               Expanded(
                 child: Row(
                   children: [
-                    // Sol: dikey server paneli (Discord stili)
-                    SizedBox(width: 72, child: _buildServerPanel()),
+                    // Sol: dikey server paneli kaldirildi — tek default sunucu var,
+                    // sunucu ayarlari ust sag ayarlar menusunden acilir.
                     // Orta sol: kanal sidebar
                     if (isWide) SizedBox(width: 240, child: _buildSidebar()),
                     // Orta: ana içerik
@@ -1662,127 +1507,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Widget _buildServerPanel() {
-    return Container(
-      color: const Color(0xFF202225),
-      child: Column(
-        children: [
-          const SizedBox(height: 12),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              children: [
-                for (final s in _servers) _buildServerIcon(s),
-                _buildAddServerButton(),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildServerIcon(ServerInfo server) {
-    final isActive = _activeServer?.id == server.id;
-    final initials = server.name.isEmpty
-        ? '?'
-        : server.name
-            .trim()
-            .split(RegExp(r'\s+'))
-            .take(2)
-            .map((w) => w.isNotEmpty ? w[0].toUpperCase() : '')
-            .join();
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          // Sol kenar göstergesi (aktif olunca beyaz çubuk)
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            width: 4,
-            height: isActive ? 40 : 8,
-            decoration: BoxDecoration(
-              color: isActive ? Colors.white : Colors.transparent,
-              borderRadius: const BorderRadius.horizontal(
-                right: Radius.circular(4),
-              ),
-            ),
-          ),
-          Expanded(
-            child: Center(
-              child: GestureDetector(
-                onSecondaryTapDown: (details) =>
-                    _openServerContextMenu(details.globalPosition, server),
-                child: Tooltip(
-                  message: server.name,
-                  child: InkWell(
-                    onTap: () => _switchToServer(server),
-                    customBorder: const CircleBorder(),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: isActive
-                            ? const Color(0xFF5865F2)
-                            : const Color(0xFF36393F),
-                        borderRadius:
-                            BorderRadius.circular(isActive ? 16 : 24),
-                      ),
-                      child: Center(
-                        child: Text(
-                          initials,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAddServerButton() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          const SizedBox(width: 4),
-          Expanded(
-            child: Center(
-              child: Tooltip(
-                message: 'Yeni sunucu ekle',
-                child: InkWell(
-                  onTap: _openAddServerDialog,
-                  customBorder: const CircleBorder(),
-                  child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF36393F),
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: const Center(
-                      child: Icon(Icons.add,
-                          color: Color(0xFF3BA55D), size: 24),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  // _buildServerPanel ve _buildServerIcon kaldirildi — sol sunucu sutunu artik yok.
+  // Tek default sunucu var ve sunucu ayarlari ust sag ayarlar menusunden acilir.
 
   Widget _buildSidebar() {
     final textChannels = _channels.where((c) => !c.isVoice).toList();
@@ -1793,30 +1519,8 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          InkWell(
-            onTap: _activeServer == null
-                ? null
-                : () => _showInviteCodeDialog(_activeServer!),
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              color: const Color(0xFF202225),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _activeServer?.name ?? 'Sunucu',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const Icon(Icons.expand_more,
-                      color: Colors.white54, size: 18),
-                ],
-              ),
-            ),
-          ),
+          // Sunucu adi basligi kaldirildi — tek sabit sunucu var, marka
+          // tepedeki title bar'da gosteriliyor.
           Expanded(
             child: ListView(
               children: [
@@ -1851,8 +1555,8 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          // Sadece admin/owner kanal oluşturabilir
-          if (canManage)
+          // Sadece admin/owner kanal olusturabilir / yetkilerini duzenleyebilir
+          if (canManage) ...[
             InkWell(
               onTap: () => _openCreateChannelDialog(channelType),
               borderRadius: BorderRadius.circular(4),
@@ -1865,7 +1569,37 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
             ),
+            InkWell(
+              onTap: () => _openChannelListSettings(channelType),
+              borderRadius: BorderRadius.circular(4),
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(
+                  Icons.tune,
+                  size: 14,
+                  color: Colors.white54,
+                ),
+              ),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  Future<void> _openChannelListSettings(String channelType) async {
+    final server = _activeServer;
+    if (server == null) return;
+    final channels = _channels
+        .where((c) => channelType == 'voice' ? c.isVoice : !c.isVoice)
+        .toList();
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _ChannelListSettingsDialog(
+        token: _auth.token,
+        serverId: server.id,
+        channels: channels,
+        channelType: channelType,
       ),
     );
   }
@@ -2722,7 +2456,11 @@ class _AddServerDialogState extends State<_AddServerDialog> {
 
 class _ChannelCreateDialog extends StatefulWidget {
   final String initialType;
-  const _ChannelCreateDialog({required this.initialType});
+  final List<Role> roles;
+  const _ChannelCreateDialog({
+    required this.initialType,
+    this.roles = const [],
+  });
 
   @override
   State<_ChannelCreateDialog> createState() => _ChannelCreateDialogState();
@@ -2732,17 +2470,52 @@ class _ChannelCreateDialogState extends State<_ChannelCreateDialog> {
   late String _type;
   final _nameCtrl = TextEditingController();
   String? _error;
+  // roleId -> { 'view': state, 'participate': state, 'manage': state }
+  // state: -1=Deny, 0=Default, +1=Allow
+  late Map<int, Map<String, int>> _overrides;
 
   @override
   void initState() {
     super.initState();
     _type = widget.initialType;
+    _overrides = {
+      for (final r in widget.roles)
+        r.id: {'view': 0, 'participate': 0, 'manage': 0}
+    };
   }
 
   @override
   void dispose() {
     _nameCtrl.dispose();
     super.dispose();
+  }
+
+  int _participateBit() =>
+      _type == 'voice' ? Permissions.connectVoice : Permissions.sendMessages;
+
+  List<ChannelRoleOverride> _collectOverrides() {
+    final out = <ChannelRoleOverride>[];
+    _overrides.forEach((roleId, states) {
+      int allow = 0, deny = 0;
+      void apply(int bit, int s) {
+        if (s > 0) {
+          allow |= bit;
+        } else if (s < 0) {
+          deny |= bit;
+        }
+      }
+      apply(Permissions.viewChannels, states['view']!);
+      apply(_participateBit(), states['participate']!);
+      apply(Permissions.manageChannels, states['manage']!);
+      if (allow != 0 || deny != 0) {
+        out.add(ChannelRoleOverride(
+          roleId: roleId,
+          allowPerms: allow,
+          denyPerms: deny,
+        ));
+      }
+    });
+    return out;
   }
 
   void _submit() {
@@ -2755,7 +2528,17 @@ class _ChannelCreateDialogState extends State<_ChannelCreateDialog> {
       setState(() => _error = 'En fazla 50 karakter');
       return;
     }
-    Navigator.of(context).pop((name: name, type: _type));
+    Navigator.of(context).pop(
+      (name: name, type: _type, overrides: _collectOverrides()),
+    );
+  }
+
+  void _cycleState(int roleId, String key) {
+    setState(() {
+      final cur = _overrides[roleId]![key]!;
+      // 0 → +1 → -1 → 0
+      _overrides[roleId]![key] = cur == 0 ? 1 : (cur > 0 ? -1 : 0);
+    });
   }
 
   @override
@@ -2763,7 +2546,7 @@ class _ChannelCreateDialogState extends State<_ChannelCreateDialog> {
     return Dialog(
       backgroundColor: const Color(0xFF2F3136),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
+        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 640),
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
@@ -2777,7 +2560,7 @@ class _ChannelCreateDialogState extends State<_ChannelCreateDialog> {
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
-                      'Kanal oluştur',
+                      'Kanal olustur',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 17,
@@ -2792,7 +2575,7 @@ class _ChannelCreateDialogState extends State<_ChannelCreateDialog> {
                 ],
               ),
               const SizedBox(height: 12),
-              const Text('KANAL TİPİ',
+              const Text('KANAL TIPI',
                   style: TextStyle(
                       color: Colors.white54,
                       fontSize: 11,
@@ -2804,7 +2587,7 @@ class _ChannelCreateDialogState extends State<_ChannelCreateDialog> {
                   Expanded(
                     child: _TypeRadio(
                       icon: Icons.tag,
-                      label: 'Metin Kanalı',
+                      label: 'Metin Kanali',
                       selected: _type == 'text',
                       onTap: () => setState(() => _type = 'text'),
                     ),
@@ -2846,18 +2629,50 @@ class _ChannelCreateDialogState extends State<_ChannelCreateDialog> {
                 ),
                 onSubmitted: (_) => _submit(),
               ),
+              if (widget.roles.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text('YETKILER (ROL BAZINDA)',
+                    style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1)),
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF202225),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: ChannelPermsTable(
+                    roles: widget.roles,
+                    overrides: _overrides,
+                    participateLabel:
+                        _type == 'voice' ? 'Katil' : 'Mesaj Gonder',
+                    onCycle: _cycleState,
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Bos = varsayilan (rol izinleri). Yesil = izin ver. Kirmizi = reddet.',
+                    style: TextStyle(color: Colors.white38, fontSize: 10),
+                  ),
+                ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 8),
                 Text(_error!,
                     style: const TextStyle(color: Colors.redAccent)),
               ],
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('İptal',
+                    child: const Text('Iptal',
                         style: TextStyle(color: Colors.white70)),
                   ),
                   const SizedBox(width: 8),
@@ -2866,13 +2681,477 @@ class _ChannelCreateDialogState extends State<_ChannelCreateDialog> {
                       backgroundColor: const Color(0xFF5865F2),
                     ),
                     onPressed: _submit,
-                    child: const Text('Oluştur'),
+                    child: const Text('Olustur'),
                   ),
                 ],
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Rol bazinda kanal yetki tablosu (tri-state). 3 sutun:
+/// Goruntule (VIEW_CHANNELS) / Katil (SEND_MESSAGES yada CONNECT_VOICE) /
+/// Yonet (MANAGE_CHANNELS).
+class ChannelPermsTable extends StatelessWidget {
+  final List<Role> roles;
+  // roleId -> { 'view', 'participate', 'manage' } -> state (-1/0/+1)
+  final Map<int, Map<String, int>> overrides;
+  final String participateLabel;
+  final void Function(int roleId, String key) onCycle;
+  const ChannelPermsTable({
+    super.key,
+    required this.roles,
+    required this.overrides,
+    required this.participateLabel,
+    required this.onCycle,
+  });
+
+  Color _roleColor(String hex) {
+    final clean = hex.replaceAll('#', '');
+    if (clean.length != 6) return const Color(0xFF99AAB5);
+    return Color(int.parse('FF$clean', radix: 16));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        // Header satiri
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              const Expanded(
+                flex: 4,
+                child: Text('ROL',
+                    style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.8)),
+              ),
+              Expanded(
+                flex: 2,
+                child: Text('Goruntule',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: Colors.white38,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold)),
+              ),
+              Expanded(
+                flex: 2,
+                child: Text(participateLabel,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: Colors.white38,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold)),
+              ),
+              Expanded(
+                flex: 2,
+                child: Text('Yonet',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: Colors.white38,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ),
+        Container(height: 1, color: Colors.white12),
+        // Her rol icin bir satir
+        for (final r in roles) _roleRow(r),
+      ],
+    );
+  }
+
+  Widget _roleRow(Role r) {
+    final state = overrides[r.id] ?? {'view': 0, 'participate': 0, 'manage': 0};
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 4,
+            child: Row(
+              children: [
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: _roleColor(r.color),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    r.name,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 12),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(flex: 2, child: Center(child: _TriCell(state['view']!, () => onCycle(r.id, 'view')))),
+          Expanded(flex: 2, child: Center(child: _TriCell(state['participate']!, () => onCycle(r.id, 'participate')))),
+          Expanded(flex: 2, child: Center(child: _TriCell(state['manage']!, () => onCycle(r.id, 'manage')))),
+        ],
+      ),
+    );
+  }
+}
+
+/// Tri-state hucre: 0=Default(/), +1=Allow(yesil V), -1=Deny(kirmizi X).
+class _TriCell extends StatelessWidget {
+  final int state;
+  final VoidCallback onTap;
+  const _TriCell(this.state, this.onTap);
+
+  @override
+  Widget build(BuildContext context) {
+    Color bg;
+    IconData icon;
+    Color iconColor;
+    if (state > 0) {
+      bg = const Color(0xFF3BA55D).withValues(alpha: 0.18);
+      icon = Icons.check;
+      iconColor = const Color(0xFF3BA55D);
+    } else if (state < 0) {
+      bg = const Color(0xFFED4245).withValues(alpha: 0.18);
+      icon = Icons.close;
+      iconColor = const Color(0xFFED4245);
+    } else {
+      bg = Colors.transparent;
+      icon = Icons.remove;
+      iconColor = Colors.white38;
+    }
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(4),
+      child: Container(
+        width: 28,
+        height: 24,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Colors.white12),
+        ),
+        alignment: Alignment.center,
+        child: Icon(icon, size: 16, color: iconColor),
+      ),
+    );
+  }
+}
+
+/// Mevcut kanallari listeleyip her birinin rol bazli yetkilerini ayarlamak
+/// icin dialog. Sidebar'daki settings ikonundan acilir.
+class _ChannelListSettingsDialog extends StatefulWidget {
+  final String token;
+  final int serverId;
+  final List<Channel> channels;
+  final String channelType; // 'text' | 'voice'
+  const _ChannelListSettingsDialog({
+    required this.token,
+    required this.serverId,
+    required this.channels,
+    required this.channelType,
+  });
+
+  @override
+  State<_ChannelListSettingsDialog> createState() =>
+      _ChannelListSettingsDialogState();
+}
+
+class _ChannelListSettingsDialogState
+    extends State<_ChannelListSettingsDialog> {
+  List<Role> _roles = [];
+  // channelId -> roleId -> { view, participate, manage } -> state
+  final Map<int, Map<int, Map<String, int>>> _state = {};
+  final Set<int> _loadingChannels = {};
+  final Set<int> _expanded = {};
+  final Set<int> _saving = {};
+  bool _loadingRoles = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAll();
+  }
+
+  Future<void> _loadAll() async {
+    try {
+      final roles = await Api.getServerRoles(widget.token, widget.serverId);
+      if (!mounted) return;
+      setState(() {
+        _roles = roles;
+        _loadingRoles = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _loadingRoles = false;
+      });
+    }
+  }
+
+  Future<void> _loadChannelOverrides(int channelId) async {
+    if (_loadingChannels.contains(channelId)) return;
+    setState(() => _loadingChannels.add(channelId));
+    try {
+      final perms = await Api.getChannelPermissions(widget.token, channelId);
+      if (!mounted) return;
+      final stateMap = <int, Map<String, int>>{};
+      for (final r in _roles) {
+        stateMap[r.id] = {'view': 0, 'participate': 0, 'manage': 0};
+      }
+      for (final o in perms.overrides) {
+        final cell = stateMap[o.roleId] ??
+            {'view': 0, 'participate': 0, 'manage': 0};
+        cell['view'] = _bitState(o.allowPerms, o.denyPerms, Permissions.viewChannels);
+        cell['participate'] = _bitState(o.allowPerms, o.denyPerms, _participateBit());
+        cell['manage'] = _bitState(o.allowPerms, o.denyPerms, Permissions.manageChannels);
+        stateMap[o.roleId] = cell;
+      }
+      setState(() {
+        _state[channelId] = stateMap;
+        _loadingChannels.remove(channelId);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loadingChannels.remove(channelId);
+      });
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Yetkiler alinamadi: $e')));
+    }
+  }
+
+  int _participateBit() => widget.channelType == 'voice'
+      ? Permissions.connectVoice
+      : Permissions.sendMessages;
+
+  int _bitState(int allow, int deny, int bit) {
+    final isAllow = (allow & bit) == bit;
+    final isDeny = (deny & bit) == bit;
+    if (isAllow) return 1;
+    if (isDeny) return -1;
+    return 0;
+  }
+
+  Future<void> _saveChannelRole(int channelId, int roleId) async {
+    final cell = _state[channelId]?[roleId];
+    if (cell == null) return;
+    final key = channelId * 100000 + roleId;
+    setState(() => _saving.add(key));
+    int allow = 0, deny = 0;
+    void apply(int bit, int s) {
+      if (s > 0) {
+        allow |= bit;
+      } else if (s < 0) {
+        deny |= bit;
+      }
+    }
+
+    apply(Permissions.viewChannels, cell['view']!);
+    apply(_participateBit(), cell['participate']!);
+    apply(Permissions.manageChannels, cell['manage']!);
+    try {
+      if (allow == 0 && deny == 0) {
+        await Api.clearChannelRoleOverride(widget.token, channelId, roleId);
+      } else {
+        await Api.setChannelRoleOverride(
+          widget.token,
+          channelId,
+          roleId,
+          allowPerms: allow,
+          denyPerms: deny,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Kaydedilemedi: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving.remove(key));
+    }
+  }
+
+  void _cycleAndSave(int channelId, int roleId, String key) {
+    setState(() {
+      final cell = _state[channelId]![roleId]!;
+      final cur = cell[key]!;
+      cell[key] = cur == 0 ? 1 : (cur > 0 ? -1 : 0);
+    });
+    _saveChannelRole(channelId, roleId);
+  }
+
+  String get _title => widget.channelType == 'voice'
+      ? 'Sesli Kanal Yetkileri'
+      : 'Metin Kanali Yetkileri';
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF36393F),
+      insetPadding: const EdgeInsets.all(32),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 640),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    widget.channelType == 'voice'
+                        ? Icons.volume_up
+                        : Icons.tag,
+                    color: const Color(0xFF5865F2),
+                    size: 22,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white54),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (_loadingRoles)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 40),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(_error!,
+                      style: const TextStyle(color: Colors.redAccent)),
+                )
+              else if (widget.channels.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 40),
+                  child: Center(
+                    child: Text('Bu turde kanal yok',
+                        style: TextStyle(color: Colors.white54)),
+                  ),
+                )
+              else
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: widget.channels.length,
+                    itemBuilder: (_, i) => _channelExpansion(widget.channels[i]),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _channelExpansion(Channel c) {
+    final expanded = _expanded.contains(c.id);
+    final loading = _loadingChannels.contains(c.id);
+    final cellMap = _state[c.id];
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2F3136),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () {
+              setState(() {
+                if (expanded) {
+                  _expanded.remove(c.id);
+                } else {
+                  _expanded.add(c.id);
+                }
+              });
+              if (!expanded && cellMap == null) {
+                _loadChannelOverrides(c.id);
+              }
+            },
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Text(c.isVoice ? '🔊' : '#',
+                      style: const TextStyle(
+                          color: Colors.white54, fontSize: 14)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      c.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    expanded ? Icons.expand_less : Icons.expand_more,
+                    color: Colors.white54,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (expanded) ...[
+            const Divider(color: Colors.white12, height: 1),
+            if (loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (cellMap == null)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Center(
+                    child: Text('Yetki bilgisi yok',
+                        style: TextStyle(color: Colors.white54))),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 10),
+                child: ChannelPermsTable(
+                  roles: _roles,
+                  overrides: cellMap,
+                  participateLabel: c.isVoice ? 'Katil' : 'Mesaj Gonder',
+                  onCycle: (roleId, key) => _cycleAndSave(c.id, roleId, key),
+                ),
+              ),
+          ],
+        ],
       ),
     );
   }
@@ -3516,9 +3795,9 @@ class _VolumeDialogState extends State<_VolumeDialog> {
 class _SettingsDialog extends StatefulWidget {
   final String token;
   final String username;
-  final String? email;
   final String? avatarUrl;
   final String currentServer;
+  final ServerInfo? activeServer;
   final VoiceManager voice;
   final VoidCallback onLogout;
   final Future<void> Function(String) onSaveServer;
@@ -3527,9 +3806,9 @@ class _SettingsDialog extends StatefulWidget {
   const _SettingsDialog({
     required this.token,
     required this.username,
-    required this.email,
     required this.avatarUrl,
     required this.currentServer,
+    required this.activeServer,
     required this.voice,
     required this.onLogout,
     required this.onSaveServer,
@@ -3541,16 +3820,18 @@ class _SettingsDialog extends StatefulWidget {
 }
 
 class _SettingsDialogState extends State<_SettingsDialog> {
-  int _tab = 0; // 0=Hesap, 1=Ses, 2=Kamera
+  int _tab = 0; // 0=Hesap, 1=Ses, 2=Kamera, 3=Sunucu
 
-  // Hesap sekmesi state (profil düzenleme)
+  // Sunucu sekmesi alt sekmesi (0=Genel, 1=Roller)
+  int _serverSubTab = 0;
+  List<Role> _serverRoles = [];
+  bool _loadingServerRoles = false;
+  String? _serverRolesError;
+
+  // Hesap sekmesi state (profil düzenleme — sadece username + avatar)
   late final TextEditingController _usernameCtrl;
-  late final TextEditingController _emailCtrl;
-  final _currentPasswordCtrl = TextEditingController();
-  final _newPasswordCtrl = TextEditingController();
   bool _profileLoading = false;
   bool _avatarUploading = false;
-  bool _showPasswordSection = false;
   String? _profileError;
   String? _profileSuccess;
   late String? _avatarUrl;
@@ -3582,7 +3863,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   void initState() {
     super.initState();
     _usernameCtrl = TextEditingController(text: widget.username);
-    _emailCtrl = TextEditingController(text: widget.email ?? '');
     _avatarUrl = widget.avatarUrl;
     _selectedInputId = widget.voice.preferredAudioInputId;
     _selectedOutputId = widget.voice.preferredAudioOutputId;
@@ -3590,6 +3870,82 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     _selectedCameraWidth = widget.voice.preferredCameraWidth;
     _selectedCameraFps = widget.voice.preferredCameraFps;
     _loadAudioDevices();
+  }
+
+  Future<void> _loadServerRoles() async {
+    final s = widget.activeServer;
+    if (s == null) return;
+    setState(() {
+      _loadingServerRoles = true;
+      _serverRolesError = null;
+    });
+    try {
+      final roles = await Api.getServerRoles(widget.token, s.id);
+      if (!mounted) return;
+      setState(() {
+        _serverRoles = roles;
+        _loadingServerRoles = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _serverRolesError = '$e';
+        _loadingServerRoles = false;
+      });
+    }
+  }
+
+  Future<void> _openRoleEditor({Role? role}) async {
+    final s = widget.activeServer;
+    if (s == null) return;
+    final result = await showDialog<Role>(
+      context: context,
+      builder: (ctx) => RoleEditorDialog(
+        token: widget.token,
+        serverId: s.id,
+        role: role,
+      ),
+    );
+    if (result != null) {
+      await _loadServerRoles();
+    }
+  }
+
+  Future<void> _deleteServerRole(Role role) async {
+    if (role.isDefault) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2F3136),
+        title: Text('"${role.name}" rolu silinsin mi?',
+            style: const TextStyle(color: Colors.white)),
+        content: const Text(
+          'Bu rolu olan tum uyeler rolu kaybeder.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Iptal'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Sil'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await Api.deleteRole(widget.token, role.id);
+      await _loadServerRoles();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Hata: $e')));
+      }
+    }
   }
 
   Future<void> _loadAudioDevices() async {
@@ -3624,9 +3980,6 @@ class _SettingsDialogState extends State<_SettingsDialog> {
   @override
   void dispose() {
     _usernameCtrl.dispose();
-    _emailCtrl.dispose();
-    _currentPasswordCtrl.dispose();
-    _newPasswordCtrl.dispose();
     _disposePreview();
     super.dispose();
   }
@@ -3712,19 +4065,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
 
   Future<void> _saveProfile() async {
     final username = _usernameCtrl.text.trim();
-    final email = _emailCtrl.text.trim();
-    final newPwd = _newPasswordCtrl.text;
-    final currentPwd = _currentPasswordCtrl.text;
-
-    if (newPwd.isNotEmpty && currentPwd.isEmpty) {
-      setState(() => _profileError = 'Şifre değiştirmek için mevcut şifreni gir');
+    if (username == widget.username) {
+      setState(() => _profileSuccess = 'Degisiklik yok');
       return;
     }
-    final hasChanges = username != widget.username ||
-        email != (widget.email ?? '') ||
-        newPwd.isNotEmpty;
-    if (!hasChanges) {
-      setState(() => _profileSuccess = 'Değişiklik yok');
+    if (username.length < 3) {
+      setState(() => _profileError = 'Kullanici adi en az 3 karakter olmali');
       return;
     }
 
@@ -3736,22 +4082,17 @@ class _SettingsDialogState extends State<_SettingsDialog> {
     try {
       final result = await Api.updateProfile(
         widget.token,
-        username: username != widget.username ? username : null,
-        email: email != (widget.email ?? '') ? email : null,
-        password: newPwd.isNotEmpty ? newPwd : null,
-        currentPassword: currentPwd.isNotEmpty ? currentPwd : null,
+        username: username,
       );
       if (!mounted) return;
       widget.onProfileUpdated(result);
       setState(() {
-        _profileSuccess = 'Profil güncellendi';
-        _currentPasswordCtrl.clear();
-        _newPasswordCtrl.clear();
+        _profileSuccess = 'Kullanici adi guncellendi';
       });
     } on ApiException catch (e) {
       if (mounted) setState(() => _profileError = e.message);
     } catch (e) {
-      if (mounted) setState(() => _profileError = 'Bağlantı hatası: $e');
+      if (mounted) setState(() => _profileError = 'Baglanti hatasi: $e');
     } finally {
       if (mounted) setState(() => _profileLoading = false);
     }
@@ -3930,6 +4271,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                     _sideItem('Hesap', 0, Icons.person),
                     _sideItem('Ses', 1, Icons.volume_up),
                     _sideItem('Kamera', 2, Icons.videocam),
+                    _sideItem('Sunucu', 3, Icons.dns),
                     const Spacer(),
                     const Divider(color: Colors.white24, height: 1),
                     Padding(
@@ -3963,7 +4305,9 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                         ? _buildAccountTab()
                         : _tab == 1
                             ? _buildAudioTab()
-                            : _buildCameraTab(),
+                            : _tab == 2
+                                ? _buildCameraTab()
+                                : _buildServerTab(),
                   ),
                   Positioned(
                     right: 8,
@@ -3991,6 +4335,12 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           setState(() => _tab = idx);
           if (idx == 2 && !_camerasLoaded) {
             _loadCameraDevices();
+          }
+          if (idx == 3 &&
+              _serverSubTab == 1 &&
+              _serverRoles.isEmpty &&
+              !_loadingServerRoles) {
+            _loadServerRoles();
           }
         },
         child: Container(
@@ -4121,54 +4471,11 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             style: const TextStyle(color: Colors.white),
             decoration: _input(),
           ),
-          const SizedBox(height: 14),
-
-          _label('E-POSTA'),
           const SizedBox(height: 6),
-          TextField(
-            controller: _emailCtrl,
-            style: const TextStyle(color: Colors.white),
-            keyboardType: TextInputType.emailAddress,
-            decoration: _input(),
+          const Text(
+            'Diger kullanicilara bu adla gorunursun. E-posta veya sifre yok.',
+            style: TextStyle(color: Colors.white38, fontSize: 11),
           ),
-          const SizedBox(height: 12),
-
-          // Şifre değiştirme bölümü (gizli)
-          TextButton.icon(
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.white70,
-              padding: EdgeInsets.zero,
-              alignment: Alignment.centerLeft,
-            ),
-            onPressed: () =>
-                setState(() => _showPasswordSection = !_showPasswordSection),
-            icon: Icon(
-              _showPasswordSection ? Icons.expand_less : Icons.expand_more,
-              size: 16,
-            ),
-            label: const Text('Şifre değiştir',
-                style: TextStyle(fontSize: 13)),
-          ),
-          if (_showPasswordSection) ...[
-            const SizedBox(height: 8),
-            _label('MEVCUT ŞİFRE'),
-            const SizedBox(height: 6),
-            TextField(
-              controller: _currentPasswordCtrl,
-              obscureText: true,
-              style: const TextStyle(color: Colors.white),
-              decoration: _input(),
-            ),
-            const SizedBox(height: 14),
-            _label('YENİ ŞİFRE'),
-            const SizedBox(height: 6),
-            TextField(
-              controller: _newPasswordCtrl,
-              obscureText: true,
-              style: const TextStyle(color: Colors.white),
-              decoration: _input(),
-            ),
-          ],
 
           if (_profileError != null) ...[
             const SizedBox(height: 12),
@@ -4209,7 +4516,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                           strokeWidth: 2, color: Colors.white),
                     )
                   : const Icon(Icons.save, size: 16),
-              label: const Text('Profili Kaydet'),
+              label: const Text('Kaydet'),
               onPressed: _profileLoading ? null : _saveProfile,
             ),
           ),
@@ -4217,10 +4524,126 @@ class _SettingsDialogState extends State<_SettingsDialog> {
           const SizedBox(height: 30),
           const Divider(color: Colors.white12, height: 1),
           const SizedBox(height: 20),
-
-          _label('BAĞLI SUNUCU'),
+          _label('UYGULAMA SURUMU'),
           const SizedBox(height: 8),
-          // Mevcut sunucu kartı + "Sunucuları Yönet" butonu
+          _label('Guncelleme icin updater/updater.exe kullanin'),
+        ],
+      ),
+    );
+  }
+
+  /// Sunucu sekmesi — alt sekmeleri (Genel, Roller) ile sunucu ayarlari.
+  Widget _buildServerTab() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Ust: baslik + alt sekme barlari
+        Row(
+          children: [
+            const Text('Sunucu',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(width: 16),
+            _subTabButton('Genel', 0),
+            const SizedBox(width: 6),
+            _subTabButton('Roller', 1),
+          ],
+        ),
+        const SizedBox(height: 16),
+        // Icerik
+        Expanded(
+          child: _serverSubTab == 0
+              ? _buildServerGeneralSubTab()
+              : _buildServerRolesSubTab(),
+        ),
+      ],
+    );
+  }
+
+  Widget _subTabButton(String label, int idx) {
+    final active = _serverSubTab == idx;
+    return InkWell(
+      borderRadius: BorderRadius.circular(4),
+      onTap: () {
+        setState(() => _serverSubTab = idx);
+        if (idx == 1 && _serverRoles.isEmpty && !_loadingServerRoles) {
+          _loadServerRoles();
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF5865F2) : const Color(0xFF2F3136),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: active ? Colors.white : Colors.white70,
+            fontSize: 12,
+            fontWeight: active ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Sunucu > Genel: aktif sunucu karti + host yonetimi.
+  Widget _buildServerGeneralSubTab() {
+    final s = widget.activeServer;
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Aktif sunucu kartı
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2F3136),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF5865F2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.dns, color: Colors.white),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        s?.name ?? '(sunucu yok)',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        s?.isOwner == true ? 'Sahip' : 'Uye',
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+
+          _label('BAGLI SUNUCU (HOST)'),
+          const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -4229,7 +4652,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             ),
             child: Row(
               children: [
-                const Icon(Icons.dns,
+                const Icon(Icons.public,
                     color: Color(0xFF5865F2), size: 18),
                 const SizedBox(width: 10),
                 Expanded(
@@ -4245,7 +4668,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                         ),
                       ),
                       const Text(
-                        'Sunucu değişikliği için uygulamayı yeniden başlatman gerekir.',
+                        'Sunucu degisikligi icin uygulamayi yeniden baslatman gerekir.',
                         style: TextStyle(
                             color: Colors.white38, fontSize: 11),
                       ),
@@ -4258,7 +4681,7 @@ class _SettingsDialogState extends State<_SettingsDialog> {
                     side: const BorderSide(color: Colors.white24),
                   ),
                   icon: const Icon(Icons.swap_horiz, size: 16),
-                  label: const Text('Sunucuları Yönet'),
+                  label: const Text('Sunuculari Yonet'),
                   onPressed: () async {
                     final navigator = Navigator.of(context);
                     final selected = await showDialog<String>(
@@ -4276,15 +4699,185 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               ],
             ),
           ),
-          const SizedBox(height: 30),
-          const Divider(color: Colors.white12, height: 1),
-          const SizedBox(height: 20),
-          _label('UYGULAMA SÜRÜMÜ'),
-          const SizedBox(height: 8),
-          _label('Güncelleme için updater/updater.exe kullanın'),
         ],
       ),
     );
+  }
+
+  /// Sunucu > Roller alt sekmesi.
+  Widget _buildServerRolesSubTab() {
+    final canManage =
+        widget.activeServer?.hasPermission(Permissions.manageRoles) ?? false;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('Roller',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold)),
+            const Spacer(),
+            if (canManage)
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF5865F2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8)),
+                icon: const Icon(Icons.add, size: 14),
+                label: const Text('Yeni Rol',
+                    style: TextStyle(fontSize: 12)),
+                onPressed: () => _openRoleEditor(),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (!canManage)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.info_outline,
+                    color: Colors.orangeAccent, size: 14),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Rol yonetme yetkin yok — rolleri yalnizca goruntuleyebilirsin.',
+                    style: TextStyle(
+                        color: Colors.orangeAccent, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: _loadingServerRoles
+              ? const Center(child: CircularProgressIndicator())
+              : _serverRolesError != null
+                  ? Center(
+                      child: Text(_serverRolesError!,
+                          style: const TextStyle(color: Colors.redAccent)))
+                  : _serverRoles.isEmpty
+                      ? const Center(
+                          child: Text('Henuz rol yok',
+                              style: TextStyle(color: Colors.white54)),
+                        )
+                      : ListView.builder(
+                          itemCount: _serverRoles.length,
+                          itemBuilder: (_, i) =>
+                              _roleListItem(_serverRoles[i], canManage),
+                        ),
+        ),
+      ],
+    );
+  }
+
+  Widget _roleListItem(Role role, bool canManage) {
+    final color = _parseRoleColor(role.color);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2F3136),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 12,
+            height: 12,
+            decoration:
+                BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      role.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (role.isDefault) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF40444B),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                        child: const Text(
+                          'VARSAYILAN',
+                          style: TextStyle(
+                              color: Colors.white54,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _rolePermissionSummary(role.permissions),
+                  style: const TextStyle(
+                      color: Colors.white54, fontSize: 11),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          if (canManage) ...[
+            IconButton(
+              icon: const Icon(Icons.edit,
+                  size: 16, color: Colors.white54),
+              tooltip: 'Duzenle',
+              onPressed: () => _openRoleEditor(role: role),
+            ),
+            if (!role.isDefault)
+              IconButton(
+                icon: const Icon(Icons.delete,
+                    size: 16, color: Colors.redAccent),
+                tooltip: 'Sil',
+                onPressed: () => _deleteServerRole(role),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _rolePermissionSummary(int perms) {
+    final names = <String>[];
+    for (final entry in Permissions.labels.entries) {
+      if ((perms & entry.key) == entry.key) names.add(entry.value);
+    }
+    if (names.isEmpty) return 'Yetki yok';
+    if (names.length > 3) {
+      return '${names.take(3).join(', ')} ve ${names.length - 3} diger';
+    }
+    return names.join(', ');
+  }
+
+  Color _parseRoleColor(String hex) {
+    final clean = hex.replaceAll('#', '');
+    if (clean.length != 6) return const Color(0xFF99AAB5);
+    return Color(int.parse('FF$clean', radix: 16));
   }
 
   Widget _label(String text) => Text(

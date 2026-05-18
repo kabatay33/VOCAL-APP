@@ -1,4 +1,4 @@
-# VOCAL-APP yeni surum yayinlama scripti (GitHub Releases).
+# LocalHub yeni surum yayinlama scripti (GitHub Releases).
 #
 # Kullanim:
 #   .\scripts\publish-release.ps1 -Version 1.0.20
@@ -10,14 +10,14 @@
 #   3) Flutter Windows release build alir
 #   4) Backend prod deps'lerini hazirlar (npm install --omit=dev)
 #   5) updater.exe + backend + version.txt'i Release\ icine kopyalar
-#   6) Release klasorunu zip'ler -> dist\VOCAL-APP-X.Y.Z.zip
+#   6) Release klasorunu zip'ler -> dist\LocalHub-X.Y.Z.zip
 #   7) gh release create ile GitHub'a yayinlar
 #
 # Onkosullar:
 #   - gh CLI (auth login yapilmis veya $env:GH_TOKEN ayarli)
 #   - Dart SDK PATH'de
 #   - Flutter SDK PATH'de
-#   - Repo zaten kabatay33/VOCAL-APP remote'una bagli
+#   - Repo zaten kabatay33/LocalHub remote'una bagli
 
 param(
   [Parameter(Mandatory=$true)]
@@ -38,7 +38,7 @@ $updaterDir = Join-Path $projectRoot 'updater'
 $backendDir = Join-Path $projectRoot 'backend'
 $releaseDir = Join-Path $flutterDir 'build\windows\x64\runner\Release'
 $distDir = Join-Path $projectRoot 'dist'
-$zipOut = Join-Path $distDir "VOCAL-APP-$Version.zip"
+$zipOut = Join-Path $distDir "LocalHub-$Version.zip"
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 
@@ -154,7 +154,7 @@ $ghArgs = @('release', 'create', "v$Version", $zipOut, '--title', "v$Version")
 if ($NotesFile -and (Test-Path $NotesFile)) {
   $ghArgs += @('--notes-file', $NotesFile)
 } else {
-  $ghArgs += @('--notes', "VOCAL-APP $Version - Otomatik guncelleme")
+  $ghArgs += @('--notes', "LocalHub $Version - Otomatik guncelleme")
 }
 & gh @ghArgs
 if ($LASTEXITCODE -ne 0) {
@@ -164,5 +164,5 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "`n[OK] Release yayinlandi: v$Version"
 Write-Host "  Zip: $zipOut"
-Write-Host "  URL: https://github.com/kabatay33/VOCAL-APP/releases/tag/v$Version"
+Write-Host "  URL: https://github.com/kabatay33/LocalHub/releases/tag/v$Version"
 Write-Host "`nKullanicilar app actiginda updater.exe otomatik guncelleyecek."

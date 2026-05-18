@@ -75,6 +75,21 @@ db.exec(`
     FOREIGN KEY (channel_id) REFERENCES channels(id),
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
+
+  -- Kanal-bazinda rol override'lari (Discord-stili allow/deny modeli).
+  -- Bir kullanicinin bir kanaldaki nihai izni:
+  --   base_perms = role'lerin OR'u
+  --   final = (base & ~deny_perms_union) | allow_perms_union
+  -- Owner her zaman ALL_PERMISSIONS (bypass).
+  CREATE TABLE IF NOT EXISTS channel_role_overrides (
+    channel_id INTEGER NOT NULL,
+    role_id INTEGER NOT NULL,
+    allow_perms INTEGER NOT NULL DEFAULT 0,
+    deny_perms INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (channel_id, role_id),
+    FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+    FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+  );
 `);
 
 // Eski veritabanı için 'type' sütununu güvenli şekilde ekle
@@ -209,15 +224,33 @@ const {
 } = require('./permissions');
 
 try {
+  // Eski "Varsayılan Sunucu" adi varsa "LocalHub" olarak yeniden adlandir
+  try {
+    db.prepare("UPDATE servers SET name = 'LocalHub' WHERE id = 1 AND name = 'Varsayılan Sunucu'").run();
+  } catch (_) {}
+
   const existingServers = db.prepare('SELECT id FROM servers').all();
   if (existingServers.length === 0) {
-    // İlk sunucu oluştur. owner_user_id = ilk kullanıcı (varsa) veya 1
+    // İlk sunucu oluştur. owner_user_id = ilk kullanıcı (varsa).
+    // Hiç kullanıcı yoksa FK kontrolünü geçici kapat (sıfır-state DB için).
     const firstUser = db.prepare('SELECT id FROM users ORDER BY id LIMIT 1').get();
-    const ownerId = firstUser ? firstUser.id : 1;
     const now = Date.now();
-    db.prepare(
-      'INSERT INTO servers (id, name, owner_user_id, invite_code, created_at) VALUES (1, ?, ?, ?, ?)'
-    ).run('Varsayılan Sunucu', ownerId, generateInviteCode(), now);
+    if (firstUser) {
+      db.prepare(
+        'INSERT INTO servers (id, name, owner_user_id, invite_code, created_at) VALUES (1, ?, ?, ?, ?)'
+      ).run('LocalHub', firstUser.id, generateInviteCode(), now);
+    } else {
+      // Hiç kullanıcı yok; owner_user_id NULL'a izin yoksa FK'yi kapat
+      db.exec('PRAGMA foreign_keys = OFF');
+      try {
+        db.prepare(
+          'INSERT INTO servers (id, name, owner_user_id, invite_code, created_at) VALUES (1, ?, 0, ?, ?)'
+        ).run('LocalHub', generateInviteCode(), now);
+      } finally {
+        db.exec('PRAGMA foreign_keys = ON');
+      }
+      console.log('[MIGRATION] Default server FK kapali iken olusturuldu (ilk kullanici login olunca owner atanabilir)');
+    }
     console.log('[MIGRATION] Default sunucu oluşturuldu (id=1)');
   }
 
@@ -302,28 +335,55 @@ try {
   console.error('[MIGRATION] roles hatası:', e.message);
 }
 
-// channels.name artık unique değil (her sunucuda aynı isim olabilir).
-// Default sunucu için varsayılan kanalları oluştur (yoksa)
-const defaultChannels = [
-  { name: 'genel', type: 'text' },
-  { name: 'sohbet', type: 'text' },
-  { name: 'oyun', type: 'text' },
-  { name: 'Sesli Oda 1', type: 'voice' },
-  { name: 'Sesli Oda 2', type: 'voice' },
-];
+// Default sunucu (id=1) için: SADECE 1 text + 1 voice kanal.
+// Mevcut fazla kanalları temizle (mesajlarıyla birlikte).
 try {
-  const hasDefault = db
-    .prepare('SELECT id FROM channels WHERE server_id = 1 LIMIT 1')
+  const now = Date.now();
+  // İlk text kanalı al, yoksa oluştur
+  let textCh = db
+    .prepare("SELECT id FROM channels WHERE server_id = 1 AND type = 'text' ORDER BY id LIMIT 1")
     .get();
-  if (!hasDefault) {
-    const insertChannel = db.prepare(
-      'INSERT INTO channels (server_id, name, type, created_at) VALUES (1, ?, ?, ?)'
-    );
-    for (const c of defaultChannels) {
-      insertChannel.run(c.name, c.type, Date.now());
-    }
+  if (!textCh) {
+    const r = db.prepare(
+      "INSERT INTO channels (server_id, name, type, created_at) VALUES (1, 'genel', 'text', ?)"
+    ).run(now);
+    textCh = { id: r.lastInsertRowid };
+    console.log('[MIGRATION] Default text kanali olusturuldu (genel)');
+  } else {
+    // Adını "genel" yap (tutarlılık için)
+    db.prepare("UPDATE channels SET name = 'genel' WHERE id = ?").run(textCh.id);
   }
-} catch (_) {}
+
+  // İlk voice kanalı al, yoksa oluştur
+  let voiceCh = db
+    .prepare("SELECT id FROM channels WHERE server_id = 1 AND type = 'voice' ORDER BY id LIMIT 1")
+    .get();
+  if (!voiceCh) {
+    const r = db.prepare(
+      "INSERT INTO channels (server_id, name, type, created_at) VALUES (1, 'Sesli Oda', 'voice', ?)"
+    ).run(now);
+    voiceCh = { id: r.lastInsertRowid };
+    console.log('[MIGRATION] Default voice kanali olusturuldu (Sesli Oda)');
+  } else {
+    db.prepare("UPDATE channels SET name = 'Sesli Oda' WHERE id = ?").run(voiceCh.id);
+  }
+
+  // Fazla kanalları + mesajlarını sil
+  const extraChannels = db
+    .prepare('SELECT id FROM channels WHERE server_id = 1 AND id NOT IN (?, ?)')
+    .all(textCh.id, voiceCh.id);
+  if (extraChannels.length > 0) {
+    const deleteMessages = db.prepare('DELETE FROM messages WHERE channel_id = ?');
+    const deleteChannel = db.prepare('DELETE FROM channels WHERE id = ?');
+    for (const c of extraChannels) {
+      deleteMessages.run(c.id);
+      deleteChannel.run(c.id);
+    }
+    console.log(`[MIGRATION] ${extraChannels.length} fazla kanal (ve mesajlari) silindi`);
+  }
+} catch (e) {
+  console.error('[MIGRATION] channels temizlik hatasi:', e.message);
+}
 
 module.exports = db;
 module.exports.generateVirtualIp = generateVirtualIp;

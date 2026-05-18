@@ -13,7 +13,7 @@ class Config {
   /// GitHub Releases üzerinden auto-update — repo bilgileri.
   /// Yeni sürüm yayınlama: `gh release create v1.0.X ./dist.zip --notes "..."`
   static const String githubOwner = 'kabatay33';
-  static const String githubRepo = 'VOCAL-APP';
+  static const String githubRepo = 'LocalHub';
 
   /// GitHub Releases API endpoint'i (latest release).
   static String get githubLatestReleaseUrl =>

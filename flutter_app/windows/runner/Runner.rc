@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.discordclone" "\0"
-            VALUE "FileDescription", "discord_clone" "\0"
+            VALUE "CompanyName", "LocalHub" "\0"
+            VALUE "FileDescription", "LocalHub" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "discord_clone" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.discordclone. All rights reserved." "\0"
-            VALUE "OriginalFilename", "discord_clone.exe" "\0"
-            VALUE "ProductName", "discord_clone" "\0"
+            VALUE "InternalName", "LocalHub" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 LocalHub. All rights reserved." "\0"
+            VALUE "OriginalFilename", "LocalHub.exe" "\0"
+            VALUE "ProductName", "LocalHub" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

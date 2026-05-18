@@ -6,7 +6,7 @@
 ///   3. GitHub Releases /latest çek
 ///   4. Mevcut version.txt ile karşılaştır
 ///   5. Yeni sürüm varsa indir + extract + kopyala + version.txt güncelle
-///   6. discord_clone.exe başlat (cmd /c start ile detached) + exit
+///   6. LocalHub.exe başlat (cmd /c start ile detached) + exit
 ///
 /// Önemli düzeltmeler:
 ///   - http paketi kullanılıyor (HttpClient yerine — redirect + stream daha
@@ -18,12 +18,14 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
+import 'package:ffi/ffi.dart';
 import 'package:http/http.dart' as http;
 
 // ==================== CONFIG ====================
 const String githubOwner = 'kabatay33';
-const String githubRepo = 'VOCAL-APP';
+const String githubRepo = 'LocalHub';
 const String radminVpnPath = r'C:\Program Files (x86)\Radmin VPN\RvRvpnGui.exe';
 
 // ==================== LOG ====================
@@ -38,12 +40,15 @@ void log(String msg) {
 
 // ==================== MAIN ====================
 Future<void> main() async {
-  // Log dosyası — updater.exe'nin yanına. Konsol penceresi kapanırsa bile
-  // dosyaya gider.
+  // Log dosyası — updater.exe'nin yanına. Append mode (silmeyiz) ki birden
+  // fazla updater run'i debug için ayrı tutalabilsin.
   final exeDir = File(Platform.resolvedExecutable).parent.path;
   _logFile = File('$exeDir${Platform.pathSeparator}updater.log');
+  // Sadece log dosyası 5 MB'tan büyükse rotate et
   try {
-    if (_logFile.existsSync()) _logFile.deleteSync();
+    if (_logFile.existsSync() && _logFile.lengthSync() > 5 * 1024 * 1024) {
+      _logFile.deleteSync();
+    }
   } catch (_) {}
 
   log('=== VOCAL-APP UPDATER BASLADI ===');
@@ -116,7 +121,7 @@ Future<void> main() async {
     log('Extract OK');
 
     // 7. App'in ve backend'in kapanmasını bekle + kopyala
-    log('discord_clone.exe kapanmasini bekleniyor...');
+    log('LocalHub.exe kapanmasini bekleniyor...');
     await waitForAppExit();
     // Backend de kapat — dosya lock'larını önle (backend\src\server.js
     // dosyası çalışan node tarafından açık olabilir)
@@ -174,19 +179,19 @@ String findInstallDir() {
   if (exeDir.toLowerCase().endsWith('\\updater') ||
       exeDir.toLowerCase().endsWith('/updater')) {
     final parent = Directory(exeDir).parent.path;
-    if (File('$parent\\discord_clone.exe').existsSync()) {
+    if (File('$parent\\LocalHub.exe').existsSync()) {
       return parent;
     }
   }
 
-  // Senaryo 2: yanında discord_clone.exe var
-  if (File('$exeDir\\discord_clone.exe').existsSync()) {
+  // Senaryo 2: yanında LocalHub.exe var
+  if (File('$exeDir\\LocalHub.exe').existsSync()) {
     return exeDir;
   }
 
   // Senaryo 3: üst klasörde
   final parent = Directory(exeDir).parent.path;
-  if (File('$parent\\discord_clone.exe').existsSync()) {
+  if (File('$parent\\LocalHub.exe').existsSync()) {
     return parent;
   }
 
@@ -324,12 +329,12 @@ Future<void> extractZip(String zipPath, String destPath) async {
 // ==================== WAIT APP EXIT ====================
 Future<void> waitForAppExit() async {
   for (int i = 0; i < 30; i++) {
-    if (!isRunning('discord_clone.exe')) return;
+    if (!isRunning('LocalHub.exe')) return;
     await Future.delayed(const Duration(seconds: 1));
   }
-  log('discord_clone.exe hala calisiyor, zorla kapatiliyor...');
+  log('LocalHub.exe hala calisiyor, zorla kapatiliyor...');
   try {
-    await Process.run('taskkill', ['/F', '/IM', 'discord_clone.exe']);
+    await Process.run('taskkill', ['/F', '/IM', 'LocalHub.exe']);
     await Future.delayed(const Duration(seconds: 1));
   } catch (e) {
     log('taskkill: $e');
@@ -388,31 +393,28 @@ void copyRecursive(Directory src, String dest) {
 
 // ==================== LAUNCH + EXIT ====================
 Future<void> launchAndExit(String installDir) async {
-  final exePath = '$installDir\\discord_clone.exe';
+  final exePath = '$installDir\\LocalHub.exe';
   log('Baslatiliyor: $exePath');
   if (!File(exePath).existsSync()) {
-    log('HATA: discord_clone.exe bulunamadi: $exePath');
+    log('HATA: LocalHub.exe bulunamadi: $exePath');
     log('Cikiyor (5 sn sonra)...');
     await Future.delayed(const Duration(seconds: 5));
     exit(1);
   }
 
-  // discord_clone'u VOCAL_NO_UPDATER=1 env ile başlat ki updater'ı yeniden
-  // tetiklemesin (endless loop önleme).
-  // Flutter Windows runner command-line args'ı engine'e iletmediği için
-  // env var kullanıyoruz.
-  final env = {'VOCAL_NO_UPDATER': '1'};
+  // LocalHub'u başlatmadan önce lock file yaz — LocalHub bunu
+  // görüp updater'ı yeniden tetiklemesin (endless loop önleme).
+  writeSkipUpdaterLock();
   try {
+    // Normal Process.start kullan — LocalHub GUI uygulaması, görünür olmalı
     await Process.start(
       exePath,
       const [],
       workingDirectory: installDir,
-      environment: env,
-      includeParentEnvironment: true,
       mode: ProcessStartMode.detached,
       runInShell: false,
     );
-    log('discord_clone.exe baslatildi (VOCAL_NO_UPDATER=1)');
+    log('LocalHub.exe baslatildi (lock file ile)');
   } catch (e) {
     log('Spawn hatasi: $e');
   }
@@ -487,24 +489,38 @@ Future<void> ensureBackendRunning(String installDir) async {
       log('node.exe bulunamadi (PATH\'de yok ve bundled degil)');
       return;
     }
-    log('Backend baslatiliyor: $nodePath $backendDir\\src\\server.js');
-    // cmd start /B ile detached spawn — updater exit etse de yaşar
-    await Process.start(
-      'cmd',
-      ['/c', 'start', '""', '/B', '/D', backendDir, nodePath, 'src\\server.js'],
-      mode: ProcessStartMode.detached,
-      runInShell: false,
-    );
-    // Port 3000 dinlemeye başlamasını bekle (max 12 sn — node + better-sqlite3
-    // initialization biraz sürebiliyor)
-    for (var i = 0; i < 24; i++) {
+    log('Backend invisible spawn ediliyor: $nodePath $backendDir\\src\\server.js');
+    // Win32 CreateProcessW + CREATE_NO_WINDOW — hiç konsol penceresi açılmaz
+    final ok = invisibleSpawn(nodePath, ['src\\server.js'], backendDir);
+    if (!ok) {
+      log('invisibleSpawn basarisiz — fallback cmd start /B');
+      await Process.start(
+        'cmd',
+        [
+          '/c',
+          'start',
+          '""',
+          '/B',
+          '/D',
+          backendDir,
+          nodePath,
+          'src\\server.js'
+        ],
+        mode: ProcessStartMode.detached,
+        runInShell: false,
+      );
+    }
+    // Port 3000 dinlemeye başlamasını bekle (max 25 sn).
+    // node + better-sqlite3 ilk init biraz sürebilir, ayrıca CREATE_NO_WINDOW
+    // ile spawn'da pipe inherit'i farklı olduğu için startup biraz daha yavaş.
+    for (var i = 0; i < 50; i++) {
       await Future.delayed(const Duration(milliseconds: 500));
       if (await isPort3000InUse()) {
         log('Backend hazir (port 3000)');
         return;
       }
     }
-    log('Backend port 3000 dinlemeye baslamadi (12sn timeout) — discord_clone yine de denesin');
+    log('Backend port 3000 dinlemeye baslamadi (25sn timeout) — LocalHub yine de denesin');
   } catch (e) {
     log('Backend baslatma hatasi: $e');
   }
@@ -560,4 +576,103 @@ List<int> parseVersion(String v) {
   }
   parts.add(bn);
   return parts;
+}
+
+// ==================== LOCK FILE ====================
+/// LocalHub'un updater'ı yeniden spawn etmesini önlemek için
+/// %TEMP%\vocal_app_skip_updater dosyası yazar. LocalHub main()'de
+/// bu dosya varsa updater'ı atlar.
+void writeSkipUpdaterLock() {
+  try {
+    final tempPath = Platform.environment['TEMP'] ?? Directory.systemTemp.path;
+    // NOT: '$tempPath\\vocal...' Dart'ta `\v` vertical-tab escape oluyor!
+    // Platform.pathSeparator kullanmak güvenli.
+    final lock = File('$tempPath${Platform.pathSeparator}vocal_app_skip_updater');
+    lock.writeAsStringSync(DateTime.now().toIso8601String());
+    log('Skip-updater lock yazildi: ${lock.path}');
+  } catch (e) {
+    log('Lock yazma hatasi: $e');
+  }
+}
+
+// ==================== INVISIBLE SPAWN ====================
+/// Win32 CreateProcessW + CREATE_NO_WINDOW + DETACHED_PROCESS.
+/// Hiç konsol penceresi açmaz, parent öldükten sonra da yaşamaya devam eder.
+bool invisibleSpawn(String exePath, List<String> args, String workingDir) {
+  try {
+    const createNoWindow = 0x08000000;
+    const detachedProcess = 0x00000008;
+    const flags = createNoWindow | detachedProcess;
+
+    final kernel32 = DynamicLibrary.open('kernel32.dll');
+    final createProcessW = kernel32.lookupFunction<
+        Int32 Function(
+          Pointer<Utf16>,
+          Pointer<Utf16>,
+          Pointer<Void>,
+          Pointer<Void>,
+          Int32,
+          Uint32,
+          Pointer<Void>,
+          Pointer<Utf16>,
+          Pointer<Uint8>,
+          Pointer<Uint8>,
+        ),
+        int Function(
+          Pointer<Utf16>,
+          Pointer<Utf16>,
+          Pointer<Void>,
+          Pointer<Void>,
+          int,
+          int,
+          Pointer<Void>,
+          Pointer<Utf16>,
+          Pointer<Uint8>,
+          Pointer<Uint8>,
+        )>('CreateProcessW');
+    final closeHandle = kernel32.lookupFunction<
+        Int32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)>('CloseHandle');
+
+    final si = calloc<Uint8>(104);
+    si.cast<Uint32>().value = 104; // STARTUPINFOW.cb
+    final pi = calloc<Uint8>(24);
+
+    final cmdBuf = StringBuffer('"$exePath"');
+    for (final a in args) {
+      cmdBuf.write(' "$a"');
+    }
+    final cmdLine = cmdBuf.toString().toNativeUtf16();
+    final dirPtr = workingDir.toNativeUtf16();
+
+    try {
+      final ok = createProcessW(
+        nullptr,
+        cmdLine,
+        nullptr,
+        nullptr,
+        0,
+        flags,
+        nullptr,
+        dirPtr,
+        si,
+        pi,
+      );
+      if (ok == 0) return false;
+      final piPtr = pi.cast<IntPtr>();
+      final hProcess = piPtr.value;
+      final hThread = (piPtr + 1).value;
+      closeHandle(Pointer<Void>.fromAddress(hProcess));
+      closeHandle(Pointer<Void>.fromAddress(hThread));
+      return true;
+    } finally {
+      malloc.free(cmdLine);
+      malloc.free(dirPtr);
+      malloc.free(si);
+      malloc.free(pi);
+    }
+  } catch (e) {
+    log('invisibleSpawn hata: $e');
+    return false;
+  }
 }

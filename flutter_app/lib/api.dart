@@ -105,6 +105,52 @@ class Channel {
   bool get isVoice => type == 'voice';
 }
 
+/// Bir kanal icin bir rol uzerindeki izin override'i (Discord-stili allow/deny).
+class ChannelRoleOverride {
+  final int roleId;
+  final int allowPerms;
+  final int denyPerms;
+  ChannelRoleOverride({
+    required this.roleId,
+    required this.allowPerms,
+    required this.denyPerms,
+  });
+  factory ChannelRoleOverride.fromJson(Map<String, dynamic> j) =>
+      ChannelRoleOverride(
+        roleId: j['role_id'] as int,
+        allowPerms: (j['allow_perms'] as num?)?.toInt() ?? 0,
+        denyPerms: (j['deny_perms'] as num?)?.toInt() ?? 0,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'role_id': roleId,
+        'allow_perms': allowPerms,
+        'deny_perms': denyPerms,
+      };
+}
+
+class ChannelPermissions {
+  final int channelId;
+  final int serverId;
+  final String type;
+  final List<ChannelRoleOverride> overrides;
+  ChannelPermissions({
+    required this.channelId,
+    required this.serverId,
+    required this.type,
+    required this.overrides,
+  });
+  factory ChannelPermissions.fromJson(Map<String, dynamic> j) =>
+      ChannelPermissions(
+        channelId: j['channel_id'] as int,
+        serverId: j['server_id'] as int,
+        type: (j['type'] as String?) ?? 'text',
+        overrides: ((j['overrides'] as List?) ?? const [])
+            .map((e) => ChannelRoleOverride.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
 class ServerInfo {
   final int id;
   final String name;
@@ -299,28 +345,55 @@ class Api {
     }
   }
 
-  static Future<AuthResult> register(
-    String email,
-    String username,
-    String password,
-  ) async {
-    final res = await http.post(
-      Uri.parse('${Config.httpBase}/api/register'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': email,
-        'username': username,
-        'password': password,
-      }),
-    );
-    return _parseAuthResponse(res);
+  /// Belirli bir host'taki şu an online olan kullanıcıları çeker.
+  /// Token gerektirmez (public endpoint). Login öncesi sunucu listesinde
+  /// "hangi sunucuda kim var" göstermek için kullanılır.
+  ///
+  /// Dönüş: avatar+username içeren basit UserProfile listesi (bağlanılamazsa boş).
+  /// Avatar URL'leri o sunucunun host'una göre mutlak URL'ye çevrilir.
+  static Future<List<UserProfile>> publicOnlineUsers(
+    String host, {
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    String base;
+    String url;
+    if (host.startsWith('http://') || host.startsWith('https://')) {
+      base = host.endsWith('/') ? host.substring(0, host.length - 1) : host;
+    } else {
+      base = 'http://$host:3000';
+    }
+    url = '$base/api/public/online-users';
+    try {
+      final res = await http.get(Uri.parse(url)).timeout(timeout);
+      if (res.statusCode != 200) return const [];
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final list = (data['users'] as List?) ?? const [];
+      return list.map((e) {
+        final m = e as Map<String, dynamic>;
+        // Avatar URL'ini sunucunun host'una gore mutlaklastir
+        final raw = m['avatar_url'] as String?;
+        String? absolute;
+        if (raw != null && raw.isNotEmpty) {
+          absolute = raw.startsWith('http') ? raw : '$base$raw';
+        }
+        return UserProfile(
+          id: m['id'] as int,
+          username: m['username'] as String,
+          avatarUrl: absolute,
+        );
+      }).toList();
+    } catch (_) {
+      return const [];
+    }
   }
 
-  static Future<AuthResult> login(String email, String password) async {
+  /// Sadece username ile giriş. Yeni kullanıcıysa otomatik oluşturulur.
+  /// Şifre/email yok.
+  static Future<AuthResult> login(String username) async {
     final res = await http.post(
       Uri.parse('${Config.httpBase}/api/login'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email, 'password': password}),
+      body: jsonEncode({'username': username}),
     );
     return _parseAuthResponse(res);
   }
@@ -673,20 +746,80 @@ class Api {
   }
 
   static Future<Channel> createChannel(
-      String token, int serverId, String name, String type) async {
+    String token,
+    int serverId,
+    String name,
+    String type, {
+    List<ChannelRoleOverride>? overrides,
+  }) async {
+    final body = <String, dynamic>{'name': name, 'type': type};
+    if (overrides != null && overrides.isNotEmpty) {
+      body['overrides'] = overrides.map((o) => o.toJson()).toList();
+    }
     final res = await http.post(
       Uri.parse('${Config.httpBase}/api/servers/$serverId/channels'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
       },
-      body: jsonEncode({'name': name, 'type': type}),
+      body: jsonEncode(body),
     );
     final data = jsonDecode(res.body) as Map<String, dynamic>;
     if (res.statusCode != 200) {
       throw ApiException(data['error']?.toString() ?? 'Kanal oluşturulamadı');
     }
     return Channel.fromJson(data);
+  }
+
+  /// Bir kanalin mevcut rol override'larini getir.
+  static Future<ChannelPermissions> getChannelPermissions(
+      String token, int channelId) async {
+    final res = await http.get(
+      Uri.parse('${Config.httpBase}/api/channels/$channelId/permissions'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode != 200) {
+      throw ApiException(data['error']?.toString() ?? 'Yetkiler alinamadi');
+    }
+    return ChannelPermissions.fromJson(data);
+  }
+
+  /// Bir rol icin kanal override'ini ayarla (upsert).
+  static Future<void> setChannelRoleOverride(
+    String token,
+    int channelId,
+    int roleId, {
+    required int allowPerms,
+    required int denyPerms,
+  }) async {
+    final res = await http.put(
+      Uri.parse(
+          '${Config.httpBase}/api/channels/$channelId/permissions/$roleId'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({'allow_perms': allowPerms, 'deny_perms': denyPerms}),
+    );
+    if (res.statusCode != 200) {
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      throw ApiException(data['error']?.toString() ?? 'Yetki ayarlanamadi');
+    }
+  }
+
+  /// Bir rolun kanal override'ini tamamen kaldir.
+  static Future<void> clearChannelRoleOverride(
+      String token, int channelId, int roleId) async {
+    final res = await http.delete(
+      Uri.parse(
+          '${Config.httpBase}/api/channels/$channelId/permissions/$roleId'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (res.statusCode != 200) {
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      throw ApiException(data['error']?.toString() ?? 'Yetki silinemedi');
+    }
   }
 
   static Future<void> renameChannel(String token, int id, String name) async {

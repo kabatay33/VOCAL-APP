@@ -5,6 +5,10 @@ import '../storage.dart';
 import 'chat_screen.dart';
 import 'hamachi_network_dialog.dart';
 
+/// Sadeleştirilmiş giriş ekranı.
+///
+/// Sadece **kullanıcı adı** ile giriş — şifre/email yok. Backend var olan
+/// kullanıcıyı bulur, yoksa otomatik oluşturur (`POST /api/login {username}`).
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -13,12 +17,9 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _emailCtrl = TextEditingController();
   final _usernameCtrl = TextEditingController();
-  final _passwordCtrl = TextEditingController();
   final _serverCtrl = TextEditingController();
   bool _isLoading = false;
-  bool _isRegister = false;
   bool _rememberMe = true;
   String? _error;
 
@@ -29,14 +30,20 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _loadSavedPrefs() async {
-    final saved = await Storage.getServerHost();
-    if (saved != null && saved.isNotEmpty) {
-      _serverCtrl.text = saved;
+    final savedHost = await Storage.getServerHost();
+    if (savedHost != null && savedHost.isNotEmpty) {
+      _serverCtrl.text = savedHost;
     } else {
       _serverCtrl.text = Config.defaultHost;
     }
     final remember = await Storage.getRememberMe();
-    if (mounted) setState(() => _rememberMe = remember);
+    final lastUsername = await Storage.getLastUsername();
+    if (mounted) {
+      setState(() {
+        _rememberMe = remember;
+        if (lastUsername != null) _usernameCtrl.text = lastUsername;
+      });
+    }
   }
 
   Future<void> _openServerList() async {
@@ -58,29 +65,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _emailCtrl.dispose();
     _usernameCtrl.dispose();
-    _passwordCtrl.dispose();
     _serverCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
-    final email = _emailCtrl.text.trim();
     final username = _usernameCtrl.text.trim();
-    final password = _passwordCtrl.text;
     final server = _serverCtrl.text.trim();
 
-    if (email.isEmpty) {
-      setState(() => _error = 'E-posta boş olamaz');
-      return;
-    }
-    if (_isRegister && username.isEmpty) {
-      setState(() => _error = 'Kullanıcı adı boş olamaz');
-      return;
-    }
-    if (password.isEmpty) {
-      setState(() => _error = 'Şifre boş olamaz');
+    if (username.length < 3) {
+      setState(() => _error = 'Kullanıcı adı en az 3 karakter olmalı');
       return;
     }
     if (server.isEmpty) {
@@ -97,10 +92,7 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      final result = _isRegister
-          ? await Api.register(email, username, password)
-          : await Api.login(email, password);
-      // "Beni hatırla" tercihini kaydet
+      final result = await Api.login(username);
       await Storage.setRememberMe(_rememberMe);
       if (_rememberMe) {
         await Storage.save(
@@ -109,10 +101,8 @@ class _LoginScreenState extends State<LoginScreen> {
           userId: result.userId,
         );
       } else {
-        // Olası eski oturum izlerini temizle
         await Storage.clear();
       }
-      // Login öncesi UI'da göstermek için kullanıcı adını cache'le
       await Storage.setLastUsername(result.username);
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -144,47 +134,37 @@ class _LoginScreenState extends State<LoginScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Icon(Icons.chat_bubble,
+                    const Icon(Icons.hub,
                         size: 64, color: Color(0xFF5865F2)),
                     const SizedBox(height: 16),
-                    Text(
-                      _isRegister ? 'Hesap oluştur' : 'Tekrar hoş geldin',
-                      style: const TextStyle(
+                    const Text(
+                      'LocalHub',
+                      style: TextStyle(
                         color: Colors.white,
-                        fontSize: 22,
+                        fontSize: 24,
                         fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
                       ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Kullanici adini yaz ve giris yap',
+                      style: TextStyle(color: Colors.white54, fontSize: 12),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 24),
                     TextField(
-                      controller: _emailCtrl,
+                      controller: _usernameCtrl,
                       style: const TextStyle(color: Colors.white),
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: _input('E-posta'),
-                    ),
-                    if (_isRegister) ...[
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _usernameCtrl,
-                        style: const TextStyle(color: Colors.white),
-                        decoration: _input('Kullanıcı adı').copyWith(
-                          helperText: 'Diğer kullanıcılara görünür ad',
-                          helperStyle: const TextStyle(
-                              color: Colors.white38, fontSize: 11),
-                        ),
+                      decoration: _input('Kullanıcı adı').copyWith(
+                        helperText: 'Diğer kullanıcılara görünür ad',
+                        helperStyle:
+                            const TextStyle(color: Colors.white38, fontSize: 11),
                       ),
-                    ],
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _passwordCtrl,
-                      obscureText: true,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: _input('Şifre'),
                       onSubmitted: (_) => _submit(),
                     ),
-                    const SizedBox(height: 4),
-                    // "Beni hatırla" — açıkken oturum kalıcı, kapalıyken çıkışta unutulur
+                    const SizedBox(height: 8),
                     InkWell(
                       onTap: () =>
                           setState(() => _rememberMe = !_rememberMe),
@@ -207,9 +187,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               child: Text(
                                 'Beni hatırla',
                                 style: TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 13,
-                                ),
+                                    color: Colors.white70, fontSize: 13),
                               ),
                             ),
                           ],
@@ -217,7 +195,6 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    // Sunucu seçim kutusu - mevcut sunucuyu gösterir + tıklanınca liste açar
                     InkWell(
                       onTap: _openServerList,
                       borderRadius: BorderRadius.circular(6),
@@ -294,21 +271,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 color: Colors.white,
                               ),
                             )
-                          : Text(_isRegister ? 'Kayıt ol' : 'Giriş yap'),
-                    ),
-                    TextButton(
-                      onPressed: _isLoading
-                          ? null
-                          : () => setState(() {
-                                _isRegister = !_isRegister;
-                                _error = null;
-                              }),
-                      child: Text(
-                        _isRegister
-                            ? 'Zaten hesabın var mı? Giriş yap'
-                            : 'Hesabın yok mu? Kayıt ol',
-                        style: const TextStyle(color: Color(0xFF00AFF4)),
-                      ),
+                          : const Text('Giriş Yap'),
                     ),
                   ],
                 ),

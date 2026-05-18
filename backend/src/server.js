@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -9,6 +10,7 @@ const db = require('./db');
 const {
   register,
   login,
+  loginByUsername,
   verifyToken,
   getUserById,
   updateProfile,
@@ -59,35 +61,128 @@ const avatarUpload = multer({
 });
 
 app.get('/', (_req, res) => {
-  res.json({ ok: true, name: 'discord-clone-backend' });
+  res.json({ ok: true, name: 'localhub-backend' });
 });
 
-app.post('/api/register', async (req, res) => {
+/// Backend cihazinin Radmin VPN (26.x.x.x) IP adresini doner.
+/// Bulamazsa diger 10/192.168 ozel araliklara dusulur; yine bulunamazsa null.
+/// Bu deger, login eden kullanicinin "host makinesinde mi" kontrolu icin
+/// kullanilir — host ise default sunucunun owner'i yapilir.
+function detectHostRadminIp() {
+  const interfaces = os.networkInterfaces();
+  let radmin = null;
+  let fallback = null;
+  for (const addrs of Object.values(interfaces)) {
+    if (!addrs) continue;
+    for (const addr of addrs) {
+      if (addr.family !== 'IPv4' || addr.internal) continue;
+      if (addr.address.startsWith('26.')) {
+        radmin = addr.address;
+        break;
+      }
+      // Fallback olarak ilk LAN IP'si (Radmin yoksa)
+      fallback ??= addr.address;
+    }
+    if (radmin) break;
+  }
+  return radmin ?? fallback;
+}
+
+const HOST_RADMIN_IP = detectHostRadminIp();
+console.log(`[BACKEND] Tespit edilen host Radmin/LAN IP: ${HOST_RADMIN_IP ?? '(bulunamadi)'}`);
+
+/// Gelen istegin host makinesinden mi geldigini soyler.
+/// Localhost veya backend'in kendi Radmin IP'sinden gelen istek = host.
+function isRequestFromHost(req) {
+  const raw = (req.ip || req.connection?.remoteAddress || '').toString();
+  // IPv4-mapped IPv6 prefix'ini sil (::ffff:127.0.0.1 -> 127.0.0.1)
+  const ip = raw.replace(/^::ffff:/, '');
+  if (ip === '127.0.0.1' || ip === '::1' || ip === 'localhost') return true;
+  if (HOST_RADMIN_IP && ip === HOST_RADMIN_IP) return true;
+  return false;
+}
+
+/// Bir kullaniciyi default sunucunun owner'i yap:
+/// - servers.owner_user_id'i guncelle
+/// - server_members.role = 'owner' yap
+/// - Admin rolunu ata
+function promoteUserToOwner(userId) {
   try {
-    const { email, username, password } = req.body || {};
-    const result = await register(email, username, password);
-    // Yeni kullanıcıyı default sunucuya otomatik ekle (geri uyumluluk)
+    db.prepare('UPDATE servers SET owner_user_id = ? WHERE id = 1').run(userId);
+    db.prepare(
+      "UPDATE server_members SET role = 'owner' WHERE server_id = 1 AND user_id = ?"
+    ).run(userId);
+    const adminRole = db
+      .prepare("SELECT id FROM roles WHERE server_id = 1 AND name = 'Admin'")
+      .get();
+    if (adminRole) {
+      db.prepare(
+        'INSERT OR IGNORE INTO user_roles (server_id, user_id, role_id, assigned_at) VALUES (1, ?, ?, ?)'
+      ).run(userId, adminRole.id, Date.now());
+    }
+    console.log(`[BACKEND] User ${userId} default sunucuya owner yapildi (host IP esleme)`);
+  } catch (err) {
+    console.error('[BACKEND] promoteUserToOwner hata:', err.message);
+  }
+}
+
+/// Sadece username ile giriş. Yeni kullanıcıysa otomatik oluşturur,
+/// default sunucuya üye yapar. Şifre/email yok.
+///
+/// Bonus: Eger istek host makinesinden geliyorsa (localhost veya backend'in
+/// kendi Radmin IP'si) VE default sunucunun henuz gercek bir owner'i yoksa,
+/// bu kullaniciyi otomatik olarak owner/admin yapar.
+async function loginAndJoinDefault(req, res) {
+  try {
+    const { username } = req.body || {};
+    const result = await loginByUsername(username);
+    // Default sunucuya üye yap (yoksa)
     try {
       db.prepare(
         'INSERT OR IGNORE INTO server_members (server_id, user_id, role, joined_at) VALUES (1, ?, ?, ?)'
       ).run(result.user.id, 'member', Date.now());
-    } catch (_) {}
+      // @everyone rolünü ata
+      const everyone = db.prepare(
+        'SELECT id FROM roles WHERE server_id = 1 AND is_default = 1'
+      ).get();
+      if (everyone) {
+        db.prepare(
+          'INSERT OR IGNORE INTO user_roles (server_id, user_id, role_id, assigned_at) VALUES (1, ?, ?, ?)'
+        ).run(result.user.id, everyone.id, Date.now());
+      }
+
+      // Host makinesinden gelen ilk login'i sunucunun sahibi yap.
+      // (owner_user_id = 0 zero-state placeholder; veya yine ayni host
+      //  makinesinden gelen istek)
+      if (isRequestFromHost(req)) {
+        const srv = db
+          .prepare('SELECT owner_user_id FROM servers WHERE id = 1')
+          .get();
+        // Owner henuz atanmamis (0 placeholder) → host login = owner
+        if (srv && (!srv.owner_user_id || srv.owner_user_id === 0)) {
+          promoteUserToOwner(result.user.id);
+        }
+        // Owner zaten varsa, ayni host'tan farkli username ile login olunduysa
+        // (kullanici nick degistirmis veya yeni hesap acmis) — yine de owner yap.
+        // Çünkü host makinesi sahibi her zaman admin olmali.
+        else if (srv && srv.owner_user_id !== result.user.id) {
+          // Sadece "henuz hic owner login olmadı" gibi durumda devret;
+          // aksi halde mevcut owner korunur. Bu else dali simdilik no-op.
+        }
+      }
+    } catch (e) {
+      console.error('[BACKEND] loginAndJoinDefault membership hata:', e.message);
+    }
     broadcastUserListUpdated();
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
-});
+}
 
-app.post('/api/login', async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    const result = await login(email, password);
-    res.json(result);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
+// Hem /api/login hem /api/register username-only login'e yönlendirir
+app.post('/api/login', loginAndJoinDefault);
+app.post('/api/register', loginAndJoinDefault);
 
 // JWT auth middleware (route bazlı)
 function authRequired(req, res, next) {
@@ -104,10 +199,36 @@ function authRequired(req, res, next) {
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
-    name: 'Discord Clone',
+    name: 'LocalHub',
     version: '1.0.0',
     time: Date.now(),
   });
+});
+
+/// Yetkilendirme gerektirmeyen "şu an online kim?" endpoint'i.
+/// Login ekranındaki sunucu listesi her sunucunun aktif kullanıcılarını
+/// göstermek için bu endpoint'i kullanır. Şifre/email vs hassas veri
+/// dönmez — yalnızca id + username + avatar_url.
+app.get('/api/public/online-users', (_req, res) => {
+  try {
+    // WS oturumlarındaki userId'leri topla
+    const onlineIds = new Set();
+    for (const info of clients.values()) {
+      onlineIds.add(info.userId);
+    }
+    if (onlineIds.size === 0) {
+      return res.json({ users: [] });
+    }
+    const placeholders = Array.from(onlineIds).map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT id, username, avatar_url FROM users WHERE id IN (${placeholders}) ORDER BY username COLLATE NOCASE`
+      )
+      .all(...Array.from(onlineIds));
+    res.json({ users: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Auto-updater artık GitHub Releases tabanlı — backend endpoint'i yok.
@@ -254,6 +375,69 @@ function computeUserPermissions(serverId, userId) {
 
 function hasPermission(serverId, userId, permission) {
   return hasFlag(computeUserPermissions(serverId, userId), permission);
+}
+
+/// Kullanicinin belirli bir KANAL icin gecerli toplam izin bit'leri.
+/// Discord-stili allow/deny override modeli:
+///   base = sunucu seviyesindeki computeUserPermissions
+///   her rol icin (her kullanicinin rolleri) channel_role_overrides'i topla
+///   final = (base & ~deny_union) | allow_union
+/// Owner = ALL_PERMISSIONS (bypass).
+function computeUserChannelPermissions(channelId, userId) {
+  const ch = db
+    .prepare('SELECT server_id FROM channels WHERE id = ?')
+    .get(channelId);
+  if (!ch) return 0;
+  const serverId = ch.server_id;
+
+  const member = db
+    .prepare(
+      'SELECT role FROM server_members WHERE server_id = ? AND user_id = ?'
+    )
+    .get(serverId, userId);
+  if (!member) return 0;
+  if (member.role === 'owner') return ALL_PERMISSIONS;
+
+  // Sunucu seviyesindeki base izinler
+  const base = computeUserPermissions(serverId, userId);
+
+  // Kullanicinin sahip oldugu tum rol id'leri (@everyone dahil)
+  const roleIds = new Set();
+  const everyone = db
+    .prepare(
+      'SELECT id FROM roles WHERE server_id = ? AND is_default = 1'
+    )
+    .get(serverId);
+  if (everyone) roleIds.add(everyone.id);
+  const userRoles = db
+    .prepare(
+      'SELECT role_id FROM user_roles WHERE server_id = ? AND user_id = ?'
+    )
+    .all(serverId, userId);
+  for (const r of userRoles) roleIds.add(r.role_id);
+
+  if (roleIds.size === 0) return base;
+
+  // Bu kullanicinin sahip oldugu rolleler icin kanal override'larini topla
+  const placeholders = Array.from(roleIds).map(() => '?').join(',');
+  const overrides = db
+    .prepare(
+      `SELECT allow_perms, deny_perms FROM channel_role_overrides
+       WHERE channel_id = ? AND role_id IN (${placeholders})`
+    )
+    .all(channelId, ...Array.from(roleIds));
+
+  let allowUnion = 0;
+  let denyUnion = 0;
+  for (const o of overrides) {
+    allowUnion |= o.allow_perms;
+    denyUnion |= o.deny_perms;
+  }
+  return (base & ~denyUnion) | allowUnion;
+}
+
+function hasChannelPermission(channelId, userId, permission) {
+  return hasFlag(computeUserChannelPermissions(channelId, userId), permission);
 }
 
 // Kullanıcının üye olduğu sunucular
@@ -439,18 +623,26 @@ app.get('/api/users', authRequired, (_req, res) => {
   res.json(users);
 });
 
-// Server'a özel kanal listesi
+// Server'a özel kanal listesi (sadece kullanicinin VIEW_CHANNELS yetkisine
+// sahip oldugu kanallar — owner/manageChannels'li kullanicilar tum kanallari gorur)
 app.get('/api/servers/:serverId/channels', authRequired, (req, res) => {
   const serverId = Number(req.params.serverId);
   if (!isServerMember(serverId, req.user.userId)) {
     return res.status(403).json({ error: 'Bu sunucunun üyesi değilsin' });
   }
-  const channels = db
+  const all = db
     .prepare(
       'SELECT id, server_id, name, type FROM channels WHERE server_id = ? ORDER BY type DESC, id'
     )
     .all(serverId);
-  res.json(channels);
+  // MANAGE_CHANNELS yetkisi olan herseyi gorur (admin tum kanallari listeleyebilsin)
+  const canManageAll = hasPermission(serverId, req.user.userId, PERMISSIONS.MANAGE_CHANNELS);
+  const visible = canManageAll
+    ? all
+    : all.filter((c) =>
+        hasChannelPermission(c.id, req.user.userId, PERMISSIONS.VIEW_CHANNELS)
+      );
+  res.json(visible);
 });
 
 // ============================================================
@@ -711,7 +903,7 @@ app.post('/api/servers/:serverId/channels', authRequired, (req, res) => {
         .status(403)
         .json({ error: 'Kanal oluşturma yetkin yok' });
     }
-    const { name, type } = req.body || {};
+    const { name, type, overrides } = req.body || {};
     const err = validateChannelName(name);
     if (err) return res.status(400).json({ error: err });
     const channelType = type === 'voice' ? 'voice' : 'text';
@@ -720,9 +912,29 @@ app.post('/api/servers/:serverId/channels', authRequired, (req, res) => {
         'INSERT INTO channels (server_id, name, type, created_at) VALUES (?, ?, ?, ?)'
       )
       .run(serverId, name.trim(), channelType, Date.now());
+    const channelId = result.lastInsertRowid;
+    // Olusturma sirasinda bildirilen rol override'larini uygula (opsiyonel).
+    // overrides = [{ role_id, allow_perms, deny_perms }, ...]
+    if (Array.isArray(overrides)) {
+      const upsert = db.prepare(
+        `INSERT INTO channel_role_overrides (channel_id, role_id, allow_perms, deny_perms)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(channel_id, role_id) DO UPDATE SET
+           allow_perms = excluded.allow_perms,
+           deny_perms = excluded.deny_perms`
+      );
+      for (const o of overrides) {
+        const rid = Number(o.role_id);
+        if (!rid) continue;
+        // Rol bu sunucuya ait mi?
+        const role = db.prepare('SELECT id FROM roles WHERE id = ? AND server_id = ?').get(rid, serverId);
+        if (!role) continue;
+        upsert.run(channelId, rid, (o.allow_perms | 0), (o.deny_perms | 0));
+      }
+    }
     broadcastChannelsUpdated(serverId);
     res.json({
-      id: result.lastInsertRowid,
+      id: channelId,
       server_id: serverId,
       name: name.trim(),
       type: channelType,
@@ -738,7 +950,7 @@ app.patch('/api/channels/:id', authRequired, (req, res) => {
     const channelServerId = getChannelServerId(id);
     if (!channelServerId)
       return res.status(404).json({ error: 'Kanal bulunamadı' });
-    if (!hasPermission(channelServerId, req.user.userId, PERMISSIONS.MANAGE_CHANNELS)) {
+    if (!hasChannelPermission(id, req.user.userId, PERMISSIONS.MANAGE_CHANNELS)) {
       return res
         .status(403)
         .json({ error: 'Kanal düzenleme yetkin yok' });
@@ -763,17 +975,91 @@ app.delete('/api/channels/:id', authRequired, (req, res) => {
     const channelServerId = getChannelServerId(id);
     if (!channelServerId)
       return res.status(404).json({ error: 'Kanal bulunamadı' });
-    if (!hasPermission(channelServerId, req.user.userId, PERMISSIONS.MANAGE_CHANNELS)) {
+    if (!hasChannelPermission(id, req.user.userId, PERMISSIONS.MANAGE_CHANNELS)) {
       return res
         .status(403)
         .json({ error: 'Kanal silme yetkin yok' });
     }
     db.prepare('DELETE FROM messages WHERE channel_id = ?').run(id);
+    db.prepare('DELETE FROM channel_role_overrides WHERE channel_id = ?').run(id);
     db.prepare('DELETE FROM channels WHERE id = ?').run(id);
     for (const info of clients.values()) {
       if (info.voiceChannelId === id) info.voiceChannelId = null;
     }
     broadcastChannelsUpdated(channelServerId);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/// Bir kanalin tum rol override'larini doner.
+/// Sadece MANAGE_CHANNELS yetkisi olan goruebilir (override'lari).
+app.get('/api/channels/:id/permissions', authRequired, (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const ch = db.prepare('SELECT server_id, type FROM channels WHERE id = ?').get(id);
+    if (!ch) return res.status(404).json({ error: 'Kanal bulunamadı' });
+    if (!hasChannelPermission(id, req.user.userId, PERMISSIONS.MANAGE_CHANNELS)) {
+      return res.status(403).json({ error: 'Kanal yetkilerini goruntuleme yetkin yok' });
+    }
+    const overrides = db
+      .prepare(
+        `SELECT role_id, allow_perms, deny_perms
+         FROM channel_role_overrides WHERE channel_id = ?`
+      )
+      .all(id);
+    res.json({ channel_id: id, server_id: ch.server_id, type: ch.type, overrides });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/// Bir rol icin kanal override'ini ayarla (upsert).
+/// Body: { allow_perms, deny_perms } — bit'ler.
+app.put('/api/channels/:id/permissions/:roleId', authRequired, (req, res) => {
+  try {
+    const channelId = Number(req.params.id);
+    const roleId = Number(req.params.roleId);
+    const ch = db.prepare('SELECT server_id FROM channels WHERE id = ?').get(channelId);
+    if (!ch) return res.status(404).json({ error: 'Kanal bulunamadı' });
+    const role = db.prepare('SELECT id, server_id FROM roles WHERE id = ?').get(roleId);
+    if (!role || role.server_id !== ch.server_id) {
+      return res.status(400).json({ error: 'Rol bu sunucuya ait degil' });
+    }
+    if (!hasChannelPermission(channelId, req.user.userId, PERMISSIONS.MANAGE_CHANNELS)) {
+      return res.status(403).json({ error: 'Yetki ayarlama yetkin yok' });
+    }
+    const allow = Math.max(0, (req.body?.allow_perms | 0));
+    const deny = Math.max(0, (req.body?.deny_perms | 0));
+    db.prepare(
+      `INSERT INTO channel_role_overrides (channel_id, role_id, allow_perms, deny_perms)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(channel_id, role_id) DO UPDATE SET
+         allow_perms = excluded.allow_perms,
+         deny_perms = excluded.deny_perms`
+    ).run(channelId, roleId, allow, deny);
+    broadcastChannelsUpdated(ch.server_id);
+    res.json({ ok: true, channel_id: channelId, role_id: roleId, allow_perms: allow, deny_perms: deny });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/// Bir rolun kanal override'ini tamamen kaldir (default davranisa don).
+app.delete('/api/channels/:id/permissions/:roleId', authRequired, (req, res) => {
+  try {
+    const channelId = Number(req.params.id);
+    const roleId = Number(req.params.roleId);
+    const ch = db.prepare('SELECT server_id FROM channels WHERE id = ?').get(channelId);
+    if (!ch) return res.status(404).json({ error: 'Kanal bulunamadı' });
+    if (!hasChannelPermission(channelId, req.user.userId, PERMISSIONS.MANAGE_CHANNELS)) {
+      return res.status(403).json({ error: 'Yetki ayarlama yetkin yok' });
+    }
+    db.prepare(
+      'DELETE FROM channel_role_overrides WHERE channel_id = ? AND role_id = ?'
+    ).run(channelId, roleId);
+    broadcastChannelsUpdated(ch.server_id);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -904,19 +1190,24 @@ function broadcastVoiceMembers(channelId) {
 }
 
 function broadcastChannelsUpdated(serverId) {
-  const channels = listChannels(serverId);
-  const payload = JSON.stringify({
-    type: 'channels-updated',
-    serverId,
-    channels,
-  });
-  // Sadece o sunucunun üyelerine gönder
+  const allChannels = listChannels(serverId);
+  // Her kullaniciya kendi gorebilecegi kanallari yolla (view perm filtresi).
+  // MANAGE_CHANNELS yetkisi olanlar tum kanallari gorur.
   for (const ws of clients.keys()) {
     const info = clients.get(ws);
     if (!info) continue;
-    if (ws.readyState === ws.OPEN && isServerMember(serverId, info.userId)) {
-      ws.send(payload);
-    }
+    if (ws.readyState !== ws.OPEN || !isServerMember(serverId, info.userId)) continue;
+    const canManageAll = hasPermission(serverId, info.userId, PERMISSIONS.MANAGE_CHANNELS);
+    const visible = canManageAll
+      ? allChannels
+      : allChannels.filter((c) =>
+          hasChannelPermission(c.id, info.userId, PERMISSIONS.VIEW_CHANNELS)
+        );
+    ws.send(JSON.stringify({
+      type: 'channels-updated',
+      serverId,
+      channels: visible,
+    }));
   }
 }
 
@@ -1035,7 +1326,8 @@ wss.on('connection', (ws, req) => {
     if (msg.type === 'message' && msg.channelId && msg.content) {
       const channelServerId = getChannelServerId(msg.channelId);
       if (!channelServerId ||
-          !hasPermission(channelServerId, client.userId, PERMISSIONS.SEND_MESSAGES)) {
+          !hasChannelPermission(msg.channelId, client.userId, PERMISSIONS.SEND_MESSAGES) ||
+          !hasChannelPermission(msg.channelId, client.userId, PERMISSIONS.VIEW_CHANNELS)) {
         return; // Mesaj gönderme yetkisi yok
       }
       const content = String(msg.content).slice(0, 2000);
@@ -1076,7 +1368,8 @@ wss.on('connection', (ws, req) => {
     if (msg.type === 'voice-join' && typeof msg.channelId === 'number') {
       const channelServerId = getChannelServerId(msg.channelId);
       if (!channelServerId ||
-          !hasPermission(channelServerId, client.userId, PERMISSIONS.CONNECT_VOICE)) {
+          !hasChannelPermission(msg.channelId, client.userId, PERMISSIONS.CONNECT_VOICE) ||
+          !hasChannelPermission(msg.channelId, client.userId, PERMISSIONS.VIEW_CHANNELS)) {
         return; // Sesli kanal bağlantı yetkisi yok
       }
       // Önce başka bir voice kanaldaysa oradan çık

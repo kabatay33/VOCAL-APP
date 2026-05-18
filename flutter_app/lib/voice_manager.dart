@@ -725,6 +725,14 @@ class VoiceManager extends ChangeNotifier {
   /// yeniden başlatılır ve her peer'a track replaceTrack ile uygulanır.
   Future<void> selectAudioInput(String deviceId) async {
     _preferredAudioInputId = deviceId;
+    // Native libwebrtc'ye de varsayilan cihazi soyle — boylece bir sonraki
+    // getUserMedia (ve mevcut track'ler) bu cihazi kullanir. Windows'ta
+    // sadece deviceId constraint'i kimi zaman gozardi ediliyor.
+    try {
+      await Helper.selectAudioInput(deviceId);
+    } catch (e) {
+      debugPrint('[VOICE] Helper.selectAudioInput hata (kritik degil): $e');
+    }
     if (!inVoice || _localStream == null) return;
 
     try {

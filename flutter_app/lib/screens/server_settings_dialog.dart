@@ -54,7 +54,7 @@ class _ServerSettingsDialogState extends State<ServerSettingsDialog> {
   Future<void> _openRoleEditor({Role? role}) async {
     final result = await showDialog<Role>(
       context: context,
-      builder: (ctx) => _RoleEditorDialog(
+      builder: (ctx) => RoleEditorDialog(
         token: widget.token,
         serverId: widget.server.id,
         role: role,
@@ -402,21 +402,22 @@ Color _parseHexColor(String hex) {
 }
 
 /// Tek bir rolü oluşturma/düzenleme dialog'u
-class _RoleEditorDialog extends StatefulWidget {
+class RoleEditorDialog extends StatefulWidget {
   final String token;
   final int serverId;
   final Role? role; // null = yeni rol
-  const _RoleEditorDialog({
+  const RoleEditorDialog({
+    super.key,
     required this.token,
     required this.serverId,
     this.role,
   });
 
   @override
-  State<_RoleEditorDialog> createState() => _RoleEditorDialogState();
+  State<RoleEditorDialog> createState() => RoleEditorDialogState();
 }
 
-class _RoleEditorDialogState extends State<_RoleEditorDialog> {
+class RoleEditorDialogState extends State<RoleEditorDialog> {
   late final TextEditingController _nameCtrl;
   late String _color;
   late int _perms;

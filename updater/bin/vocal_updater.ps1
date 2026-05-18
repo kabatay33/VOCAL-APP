@@ -25,9 +25,9 @@ if ($exeDir.EndsWith("\updater") -or $exeDir.EndsWith("/updater")) {
     Write-Log "updater/ alt klasorunde, install dir: $installDir"
 }
 
-# discord_clone.exe var mi?
-if (-not (Test-Path "$installDir\discord_clone.exe")) {
-    Write-Log "discord_clone.exe bulunamadi: $installDir"
+# LocalHub.exe var mi?
+if (-not (Test-Path "$installDir\LocalHub.exe")) {
+    Write-Log "LocalHub.exe bulunamadi: $installDir"
 }
 
 # 2. Mevcut versiyonu oku
@@ -64,7 +64,7 @@ try {
     if (-not $zipAsset) {
         Write-Log "ZIP dosyasi bulunamadi, mevcut surumle devam"
         Start-Sleep -Seconds 2
-        & $installDir\discord_clone.exe
+        & $installDir\LocalHub.exe
         exit 0
     }
 
@@ -72,7 +72,7 @@ try {
     if ($currentVersion -and $currentVersion -eq $latestVersion) {
         Write-Log "Uygulama guncel! Surum: $currentVersion"
         Start-Sleep -Seconds 1
-        Start-Process "$installDir\discord_clone.exe"
+        Start-Process "$installDir\LocalHub.exe"
         exit 0
     }
 
@@ -88,11 +88,11 @@ try {
     if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
     Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
-    # 8. discord_clone.exe'yi kapat
-    $discordProcess = Get-Process "discord_clone" -ErrorAction SilentlyContinue
+    # 8. LocalHub.exe'yi kapat
+    $discordProcess = Get-Process "LocalHub" -ErrorAction SilentlyContinue
     if ($discordProcess) {
-        Write-Log "discord_clone.exe kapatiliyor..."
-        Stop-Process -Name "discord_clone" -Force
+        Write-Log "LocalHub.exe kapatiliyor..."
+        Stop-Process -Name "LocalHub" -Force
         Start-Sleep -Seconds 2
     }
 
@@ -112,13 +112,13 @@ try {
     Start-Sleep -Seconds 3
 }
 
-# 10. discord_clone.exe baslat
-Write-Log "Baslatiliyor: $installDir\discord_clone.exe"
-if (Test-Path "$installDir\discord_clone.exe") {
-    Start-Process "$installDir\discord_clone.exe"
-    Write-Log "discord_clone.exe baslatildi"
+# 10. LocalHub.exe baslat
+Write-Log "Baslatiliyor: $installDir\LocalHub.exe"
+if (Test-Path "$installDir\LocalHub.exe") {
+    Start-Process "$installDir\LocalHub.exe"
+    Write-Log "LocalHub.exe baslatildi"
 } else {
-    Write-Log "discord_clone.exe BULUNAMADI"
+    Write-Log "LocalHub.exe BULUNAMADI"
 }
 
 Write-Log "UPDATER TAMAMLANDI"

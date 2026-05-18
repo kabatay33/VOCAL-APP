@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../api.dart';
 import '../storage.dart';
 import '../tunnel_service.dart';
+import '../widgets/user_avatar.dart';
 
 /// Sunucu yonetim paneli — Radmin VPN IP bazli sunucu listesi.
 ///
@@ -26,6 +26,10 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
   List<SavedServer> _servers = [];
   final Map<String, PingResult> _pingResults = {};
   final Set<String> _pinging = {};
+  /// host -> online user listesi (publicOnlineUsers cevabi).
+  /// Sunucu erisilemezse veya hata varsa null kalir; bos liste = "kimse yok".
+  final Map<String, List<UserProfile>> _onlineUsers = {};
+  final Set<String> _loadingUsers = {};
   bool _loading = true;
   bool _radminRunning = false;
 
@@ -34,6 +38,29 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
     super.initState();
     _checkRadmin();
     _load();
+  }
+
+  /// Tum kayitli sunuculara paralel olarak public online-users sorgusu at.
+  Future<void> _refreshAllOnlineUsers() async {
+    for (final s in _servers) {
+      _loadOnlineUsers(s.host);
+    }
+    // Aktif host'u da listeye dahil et (kayitli olmasa bile)
+    final current = widget.currentHost;
+    if (current.isNotEmpty && !_servers.any((s) => s.host == current)) {
+      _loadOnlineUsers(current);
+    }
+  }
+
+  Future<void> _loadOnlineUsers(String host) async {
+    if (_loadingUsers.contains(host)) return;
+    setState(() => _loadingUsers.add(host));
+    final users = await Api.publicOnlineUsers(host);
+    if (!mounted) return;
+    setState(() {
+      _loadingUsers.remove(host);
+      _onlineUsers[host] = users;
+    });
   }
 
   void _checkRadmin() {
@@ -66,6 +93,9 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
         _servers = list;
         _loading = false;
       });
+      // Sunucu listesi yuklendikten sonra her birinin online kullanicilarini
+      // ayri ayri (paralel) cek. Hatalar sessizce loglanir.
+      _refreshAllOnlineUsers();
     }
   }
 
@@ -133,6 +163,8 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
     for (final s in _servers) {
       _ping(s);
     }
+    // Online kullanici listesini de tazele
+    _refreshAllOnlineUsers();
   }
 
   Future<void> _select(SavedServer s) async {
@@ -296,7 +328,10 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
     final isPinging = _pinging.contains(s.host);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+        Row(
         children: [
           Container(
             width: 6,
@@ -415,6 +450,126 @@ class _HamachiNetworkDialogState extends State<HamachiNetworkDialog> {
             ),
             onPressed: isActive ? null : () => _select(s),
             child: Text(isActive ? 'Secili' : 'Baglan'),
+          ),
+        ],
+      ),
+      // Sunucudaki online kullanicilar — avatar + username chip'leri
+      _onlineUsersRow(s.host),
+        ],
+      ),
+    );
+  }
+
+  /// Belirli bir host icin online kullanici listesini ufak avatar+isim
+  /// chip'leri olarak render eder. Bos liste durumunda diskret bir uyari
+  /// gosterir.
+  Widget _onlineUsersRow(String host) {
+    final users = _onlineUsers[host];
+    final isLoading = _loadingUsers.contains(host);
+
+    Widget content;
+    if (isLoading && users == null) {
+      content = const Padding(
+        padding: EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            SizedBox(width: 16),
+            SizedBox(
+              width: 10,
+              height: 10,
+              child: CircularProgressIndicator(
+                  strokeWidth: 1.5, color: Colors.white38),
+            ),
+            SizedBox(width: 8),
+            Text('Kullanicilar yukleniyor...',
+                style: TextStyle(color: Colors.white38, fontSize: 11)),
+          ],
+        ),
+      );
+    } else if (users == null) {
+      content = const Padding(
+        padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
+        child: Text('Sunucuya ulasilamadi',
+            style: TextStyle(color: Colors.white38, fontSize: 11)),
+      );
+    } else if (users.isEmpty) {
+      content = const Padding(
+        padding: EdgeInsets.only(left: 16, top: 4, bottom: 4),
+        child: Text('Su an online kimse yok',
+            style: TextStyle(color: Colors.white38, fontSize: 11)),
+      );
+    } else {
+      content = Padding(
+        padding: const EdgeInsets.only(left: 12, top: 4, bottom: 4),
+        child: Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            for (final u in users) _userChip(u),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Sol bosluk (ip/nickname'in altina hizalanir)
+          const SizedBox(width: 16),
+          Expanded(child: content),
+          if (users != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF3BA55D),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${users.length} online',
+                    style: const TextStyle(
+                        color: Colors.white54, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _userChip(UserProfile u) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(4, 3, 8, 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2A2C31),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          UserAvatar(
+            username: u.username,
+            avatarUrl: u.avatarUrl,
+            radius: 9,
+            online: true,
+            statusBorderColor: const Color(0xFF2A2C31),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            u.username,
+            style: const TextStyle(
+                color: Colors.white, fontSize: 11),
           ),
         ],
       ),

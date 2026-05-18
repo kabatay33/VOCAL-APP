@@ -39,9 +39,9 @@ bool FlutterWindow::OnCreate() {
   flutter_controller_->ForceRedraw();
 
   // Input injection platform channel
-  flutter_controller_->engine()->GetRegistrarForPlugin("com.discord_clone/input");
+  flutter_controller_->engine()->GetRegistrarForPlugin("com.localhub/input");
   input_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-      flutter_controller_->engine()->messenger(), "com.discord_clone/input",
+      flutter_controller_->engine()->messenger(), "com.localhub/input",
       &flutter::StandardMethodCodec::GetInstance());
   input_channel_->SetMethodCallHandler(
       [](const flutter::MethodCall<flutter::EncodableValue>& call,

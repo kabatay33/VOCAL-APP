@@ -107,6 +107,56 @@ async function login(email, password) {
   };
 }
 
+/// Sadece username ile giriş. Kullanıcı yoksa otomatik oluşturulur.
+/// Şifre/email gerekmez. Aynı username ile farklı cihazdan giriş yapan
+/// son kişinin tokeni aktif olur (eski tokenler hala valid kalır — JWT stateless).
+async function loginByUsername(username) {
+  const cleanUsername = validateUsername(username);
+  let user = db.prepare(
+    'SELECT id, username, email, avatar_url, virtual_ip FROM users WHERE username = ?'
+  ).get(cleanUsername);
+
+  if (!user) {
+    // Yeni kullanıcı oluştur — şifresiz hesap.
+    // password_hash NOT NULL kolonu olduğu için boş string yazıyoruz (eski DB
+    // schema uyumu). Username-only mode'da bcrypt.compare hiç çağrılmıyor.
+    const result = db.prepare(
+      'INSERT INTO users (username, email, password_hash, created_at) VALUES (?, NULL, ?, ?)'
+    ).run(cleanUsername, '', Date.now());
+    const userId = result.lastInsertRowid;
+    const virtualIp = assignVirtualIp(userId);
+    db.prepare('UPDATE users SET virtual_ip = ? WHERE id = ?').run(virtualIp, userId);
+    user = {
+      id: userId,
+      username: cleanUsername,
+      email: null,
+      avatar_url: null,
+      virtual_ip: virtualIp,
+    };
+  } else if (!user.virtual_ip) {
+    // Eski hesap virtual_ip'siz olabilir — şimdi ata
+    const virtualIp = assignVirtualIp(user.id);
+    db.prepare('UPDATE users SET virtual_ip = ? WHERE id = ?').run(virtualIp, user.id);
+    user.virtual_ip = virtualIp;
+  }
+
+  const token = jwt.sign(
+    { userId: user.id, username: user.username },
+    JWT_SECRET,
+    { expiresIn: TOKEN_EXPIRY }
+  );
+  return {
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      avatar_url: user.avatar_url,
+      virtual_ip: user.virtual_ip,
+    },
+  };
+}
+
 function verifyToken(token) {
   try {
     return jwt.verify(token, JWT_SECRET);
@@ -186,6 +236,7 @@ async function updateProfile(userId, { username, email, password, currentPasswor
 module.exports = {
   register,
   login,
+  loginByUsername,
   verifyToken,
   getUserById,
   updateProfile,

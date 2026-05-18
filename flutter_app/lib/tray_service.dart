@@ -28,7 +28,7 @@ class TrayService extends TrayListener with WindowListener {
       // Asset'i geçici klasöre kopyala — tray_manager file path bekler
       final iconPath = await _materializeIcon();
       await trayManager.setIcon(iconPath);
-      await trayManager.setToolTip('Discord Clone');
+      await trayManager.setToolTip('LocalHub');
       await _refreshMenu();
       trayManager.addListener(this);
       windowManager.addListener(this);
@@ -43,7 +43,7 @@ class TrayService extends TrayListener with WindowListener {
     final bytes = await rootBundle.load('assets/app_icon.ico');
     final tempDir = Directory.systemTemp;
     final sep = Platform.pathSeparator;
-    final file = File('${tempDir.path}${sep}discord_clone_tray.ico');
+    final file = File('${tempDir.path}${sep}localhub_tray.ico');
     await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
     return file.path;
   }

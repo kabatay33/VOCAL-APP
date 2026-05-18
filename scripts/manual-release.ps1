@@ -1,11 +1,11 @@
-param([string]$Version = "1.0.13")
+﻿param([string]$Version = "1.0.13")
 $ErrorActionPreference = "Stop"
 $projectRoot = (Get-Item $PSScriptRoot).Parent.FullName
 $releaseDir = Join-Path $projectRoot 'flutter_app\build\windows\x64\runner\Release'
 $updaterBuildDir = Join-Path $projectRoot 'updater\build\windows\x64\runner\Release'
 $updaterReleaseDir = Join-Path $releaseDir 'updater'
 $distDir = Join-Path $projectRoot 'dist'
-$zipOut = Join-Path $distDir "VOCAL-APP-$Version.zip"
+$zipOut = Join-Path $distDir "LocalHub-$Version.zip"
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 New-Item -ItemType Directory -Force -Path $updaterReleaseDir | Out-Null
@@ -37,11 +37,11 @@ $ghArgs = @(
   'release', 'create',
   "v$Version",
   $zipOut,
-  '--title', "VOCAL-APP v$Version",
-  '--notes', "VOCAL-APP v$Version`n`nYenilikler:`n- Updater GUI duzeltmesi (Radmin VPN kontrolu, otomatik baslatma)`n- Playit.gg tamamen kaldirildi`n- Radmin VPN entegrasyonu (IP bazli sunucu sistemi)`n- Sunucu ekleme: Radmin VPN IP adresi ile"
+  '--title', "LocalHub v$Version",
+  '--notes', "LocalHub v$Version`n`nYenilikler:`n- Updater GUI duzeltmesi (Radmin VPN kontrolu, otomatik baslatma)`n- Playit.gg tamamen kaldirildi`n- Radmin VPN entegrasyonu (IP bazli sunucu sistemi)`n- Sunucu ekleme: Radmin VPN IP adresi ile"
 )
 & gh @ghArgs
 if ($LASTEXITCODE -ne 0) { Write-Error "gh release create basarisiz" }
 
 Write-Host "`n[OK] Release yayinlandi: v$Version"
-Write-Host "  URL: https://github.com/kabatay33/VOCAL-APP/releases/tag/v$Version"
+Write-Host "  URL: https://github.com/kabatay33/LocalHub/releases/tag/v$Version"

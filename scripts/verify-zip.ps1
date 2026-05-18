@@ -1,7 +1,7 @@
-param([string]$Version = "1.0.11")
+﻿param([string]$Version = "1.0.11")
 $ErrorActionPreference = "Stop"
 $projectRoot = (Get-Item $PSScriptRoot).Parent.FullName
-$zipPath = Join-Path $projectRoot "dist\VOCAL-APP-$Version.zip"
+$zipPath = Join-Path $projectRoot "dist\LocalHub-$Version.zip"
 $verifyDir = Join-Path $projectRoot "dist\verify"
 
 if (Test-Path $verifyDir) { Remove-Item $verifyDir -Recurse -Force }

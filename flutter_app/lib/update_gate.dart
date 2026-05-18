@@ -133,12 +133,12 @@ class _UpdateGateState extends State<UpdateGate> {
                     ),
                   ],
                 ),
-                child: const Icon(Icons.chat_bubble,
+                child: const Icon(Icons.hub,
                     color: Colors.white, size: 48),
               ),
               const SizedBox(height: 28),
               const Text(
-                'Discord Clone',
+                'LocalHub',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 22,

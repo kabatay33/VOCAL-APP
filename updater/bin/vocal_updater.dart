@@ -7,7 +7,7 @@ import 'package:win32/win32.dart';
 
 // ==================== CONFIG ====================
 const String githubOwner = 'kabatay33';
-const String githubRepo = 'VOCAL-APP';
+const String githubRepo = 'LocalHub';
 const String radminVpnPath = r'C:\Program Files (x86)\Radmin VPN\RvRvpnGui.exe';
 
 // ==================== LOG ====================
@@ -132,19 +132,19 @@ String findInstallDir() {
   if (exeDir.endsWith('\\updater') || exeDir.endsWith('/updater')) {
     final parent = Directory(exeDir).parent?.path;
     if (parent != null) {
-      final candidate = '$parent\\discord_clone.exe';
+      final candidate = '$parent\\LocalHub.exe';
       if (File(candidate).existsSync()) return parent;
     }
   }
 
-  // 2) Ayni dizinde discord_clone.exe var mi?
-  final sameDir = '$exeDir\\discord_clone.exe';
+  // 2) Ayni dizinde LocalHub.exe var mi?
+  final sameDir = '$exeDir\\LocalHub.exe';
   if (File(sameDir).existsSync()) return exeDir;
 
   // 3) Ust klasore bak
   final parentDir = Directory(exeDir).parent?.path;
   if (parentDir != null) {
-    final parentCandidate = '$parentDir\\discord_clone.exe';
+    final parentCandidate = '$parentDir\\LocalHub.exe';
     if (File(parentCandidate).existsSync()) return parentDir;
   }
 
@@ -243,11 +243,11 @@ Future<void> extractZip(String zipPath, String destPath) async {
 
 Future<void> waitForAppExit() async {
   for (int i = 0; i < 30; i++) {
-    if (!isRunning('discord_clone.exe')) return;
+    if (!isRunning('LocalHub.exe')) return;
     await Future.delayed(Duration(seconds: 1));
   }
   try {
-    await Process.run('taskkill', ['/F', '/IM', 'discord_clone.exe']);
+    await Process.run('taskkill', ['/F', '/IM', 'LocalHub.exe']);
     await Future.delayed(Duration(seconds: 1));
   } catch (_) {}
 }
@@ -276,14 +276,14 @@ void copyRecursive(Directory src, String dest) {
 
 // ==================== LAUNCH ====================
 Future<void> launchAndExit(String installDir) async {
-  final exePath = '$installDir\\discord_clone.exe';
+  final exePath = '$installDir\\LocalHub.exe';
   log('Baslatiliyor: $exePath');
 
   final exeFile = File(exePath);
-  log('discord_clone.exe var mi: ${exeFile.existsSync()}');
+  log('LocalHub.exe var mi: ${exeFile.existsSync()}');
 
   if (exeFile.existsSync()) {
-    log('discord_clone.exe boyut: ${exeFile.lengthSync()} bytes');
+    log('LocalHub.exe boyut: ${exeFile.lengthSync()} bytes');
     log('installDir var mi: ${Directory(installDir).existsSync()}');
 
     // Yontem 1: cmd /c start
@@ -324,7 +324,7 @@ Future<void> launchAndExit(String installDir) async {
       log('Process.start hata: $e');
     }
   } else {
-    log('discord_clone.exe BULUNAMADI: $exePath');
+    log('LocalHub.exe BULUNAMADI: $exePath');
   }
 
   log('Updater cikiyor...');

@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 /// Gelen uzaktan input event'lerini Windows SendInput API'ye iletir.
 /// Sadece Windows masaüstünde çalışır; diğer platformlarda no-op.
 class InputManager {
-  static const _channel = MethodChannel('com.discord_clone/input');
+  static const _channel = MethodChannel('com.localhub/input');
   static bool _initialized = false;
 
   /// Platform channel'ı başlat.

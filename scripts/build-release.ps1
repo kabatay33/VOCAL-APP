@@ -1,4 +1,4 @@
-# VOCAL-APP Release Build & GitHub Publish Script
+﻿# LocalHub Release Build & GitHub Publish Script
 # Kullanim: .\scripts\build-release.ps1 -Version 1.0.3
 
 param(
@@ -18,7 +18,7 @@ $flutterDir = Join-Path $projectRoot 'flutter_app'
 $updaterDir = Join-Path $projectRoot 'updater'
 $releaseDir = Join-Path $flutterDir 'build\windows\x64\runner\Release'
 $distDir = Join-Path $projectRoot 'dist'
-$zipOut = Join-Path $distDir "VOCAL-APP-$Version.zip"
+$zipOut = Join-Path $distDir "LocalHub-$Version.zip"
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 
@@ -49,7 +49,7 @@ New-Item -ItemType Directory -Force -Path $updaterTempDir | Out-Null
 
 Copy-Item -Path $updaterBatSrc -Destination (Join-Path $updaterTempDir "updater.bat") -Force
 Copy-Item -Path $updaterPs1Src -Destination (Join-Path $updaterTempDir "updater.ps1") -Force
-Write-Host "Updater dosyalar� gecici dizine yedeklendi"
+Write-Host "Updater dosyalarï¿½ gecici dizine yedeklendi"
 
 # 3) Ana Flutter release build
 Write-Host "`nFlutter Windows release build aliniyor..."
@@ -80,7 +80,7 @@ if (Test-Path $updaterTempDir) {
     if (Test-Path $destDataRelease) { Remove-Item $destDataRelease -Recurse -Force }
     Copy-Item -Path $dataStaging -Destination $destDataRelease -Recurse -Force
   }
-  Write-Host "Updater dosyarlari gecici dizinden release'e kopyaland� (temiz)"
+  Write-Host "Updater dosyarlari gecici dizinden release'e kopyalandï¿½ (temiz)"
 } else {
   Write-Warning "Gecici updater dizini bulunamadi!"
 }
@@ -97,7 +97,7 @@ if (-not (Test-Path $releaseDir)) {
 Set-Content -Path "$releaseDir\version.txt" -Value "$Version" -NoNewline
 Write-Host "version.txt: $Version"
 
-# 4.5) Ana dizindeki updater.exe'yi kaldir (eski sürümden kalmis olabilir)
+# 4.5) Ana dizindeki updater.exe'yi kaldir (eski sÃ¼rÃ¼mden kalmis olabilir)
 $rootUpdater = Join-Path $releaseDir "updater.exe"
 if (Test-Path $rootUpdater) {
   Remove-Item $rootUpdater -Force
@@ -117,8 +117,8 @@ $ghArgs = @(
   'release', 'create',
   "v$Version",
   $zipOut,
-  '--title', "VOCAL-APP v$Version",
-  '--notes', "VOCAL-APP v$Version"
+  '--title', "LocalHub v$Version",
+  '--notes', "LocalHub v$Version"
 )
 
 & gh @ghArgs
@@ -130,4 +130,4 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "`n[OK] Release yayinlandi: v$Version"
 Write-Host "  Zip: $zipOut ($zipSize MB)"
-Write-Host "  URL: https://github.com/kabatay33/VOCAL-APP/releases/tag/v$Version"
+Write-Host "  URL: https://github.com/kabatay33/LocalHub/releases/tag/v$Version"
