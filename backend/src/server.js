@@ -27,11 +27,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Avatar yükleme klasörü
-const uploadsDir = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// Avatar yükleme klasörü — paths modulu otomatik %LOCALAPPDATA%\LocalHub
+// kullanir (production) veya backend\uploads (dev).
+const paths = require('./paths');
+const uploadsDir = paths.uploadsDir;
 app.use('/uploads', express.static(uploadsDir));
 
 // Avatar yükleme yapılandırması (5 MB limit, sadece resim)
