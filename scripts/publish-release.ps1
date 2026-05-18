@@ -92,6 +92,50 @@ if (-not (Test-Path $releaseDir)) {
   exit 1
 }
 
+# --- Code Signing yardimcilari ---
+$certPath = Join-Path $projectRoot 'installer\cert\LocalHub.pfx'
+$certPassword = "LocalHubDev2026!"
+$signtool = $null
+$signtoolCandidates = @(
+  "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe",
+  "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe",
+  "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22000.0\x64\signtool.exe",
+  "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.19041.0\x64\signtool.exe",
+  "${env:ProgramFiles(x86)}\Windows Kits\10\App Certification Kit\signtool.exe"
+)
+$signtool = $signtoolCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$canSign = ($signtool -and (Test-Path $certPath))
+
+function Sign-File($filePath) {
+  if (-not $canSign) { return $false }
+  $args = @('sign',
+    '/f', $certPath,
+    '/p', $certPassword,
+    '/fd', 'SHA256',
+    '/td', 'SHA256',
+    '/tr', 'http://timestamp.digicert.com',
+    '/d', 'LocalHub',
+    $filePath)
+  & $signtool @args 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "  Imzalama basarisiz: $filePath (exit $LASTEXITCODE)"
+    return $false
+  }
+  return $true
+}
+
+# LocalHub.exe'yi imzala (auto-update zip'inde de imzali olsun)
+if ($canSign) {
+  Write-Host "  Imzalaniyor: LocalHub.exe"
+  if (Sign-File (Join-Path $releaseDir "LocalHub.exe")) {
+    Write-Host "  LocalHub.exe imzalandi"
+  }
+} else {
+  if (-not $signtool) { Write-Warning "  signtool.exe bulunamadi" }
+  if (-not (Test-Path $certPath)) { Write-Warning "  Sertifika yok: $certPath" }
+  Write-Warning "  Code signing atlandi - SmartScreen agresif uyarir"
+}
+
 # 4) Backend prod deps + bundle
 Write-Host "`n[4/7] Backend bundle hazirlaniyor..."
 # 4a) updater.exe Release\updater\ icine
@@ -166,7 +210,18 @@ if (-not $iscc) {
   } else {
     Push-Location (Split-Path $issFile -Parent)
     try {
-      & $iscc "/DAppVersion=$Version" $issFile
+      $isccArgs = @("/DAppVersion=$Version")
+      if ($canSign) {
+        # Inno Setup'a SignTool "standard" tanimi: kendi signtool komutumuz.
+        # $f Inno Setup tarafindan dosya yoluna replaced edilir.
+        $signCmd = "`"$signtool`" sign /f `"$certPath`" /p $certPassword /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /d LocalHub `$f"
+        $isccArgs += "/Sstandard=$signCmd"
+      } else {
+        # Sertifika yoksa Inno Setup'taki SignTool referansini etkisizlestir
+        $isccArgs += '/Sstandard=echo skip-sign'
+      }
+      $isccArgs += $issFile
+      & $iscc @isccArgs
       if ($LASTEXITCODE -ne 0) {
         Write-Warning "Inno Setup build hatasi (exit $LASTEXITCODE) - installer olusturulamadi"
       } else {
@@ -198,7 +253,29 @@ $ghArgs = @('release', 'create', "v$Version") + $releaseFiles + @('--title', "v$
 if ($NotesFile -and (Test-Path $NotesFile)) {
   $ghArgs += @('--notes-file', $NotesFile)
 } else {
-  $defaultNotes = "LocalHub $Version`n`n- Yeni kurulum icin: LocalHub-Setup-$Version.exe`n- Mevcut kullanicilar otomatik guncellenir"
+  $defaultNotes = @"
+## LocalHub $Version
+
+### Indirme
+- **Yeni kurulum:** ``LocalHub-Setup-$Version.exe``
+- **Mevcut kullanicilar:** otomatik guncellenir (uygulamayi acin)
+
+### Windows SmartScreen Uyarisi
+
+LocalHub henuz Microsoft tarafindan tanimlanan bir kod imzalama
+sertifikasi ile imzalanmadi (binlerce dolarlik EV sertifikasi gerekir).
+Bu yuzden ilk kurulumda **SmartScreen "Windows korumasi" uyarisi**
+gosterebilir. Guvenlik acisindan tehlike yoktur — kaynak kodu acik:
+https://github.com/kabatay33/LocalHub
+
+**Uyariyi gecmek icin:**
+1. ``Daha fazla bilgi`` (More info) baglantisina tikla
+2. Ac1lan ekrandan ``Yine de calistir`` (Run anyway) butonuna bas
+3. Setup acilir, kurulum normal sekilde devam eder
+
+Bir kez kurulumu yaptiktan sonra otomatik guncellemeler bu uyariyi
+tetiklemez.
+"@
   $ghArgs += @('--notes', $defaultNotes)
 }
 & gh @ghArgs
