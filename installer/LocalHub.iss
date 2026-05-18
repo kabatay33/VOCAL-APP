@@ -15,16 +15,13 @@
   #define AppVersion "1.0.0"
 #endif
 
-; Code signing - imzali setup.exe ciktisi (SignTool 'standard' ile)
-; ISCC.exe komutuna /Sstandard=... parametresi publish-release.ps1'den
-; gectiriliyor. Lokal calistirmada sign atlanir.
-#define SignToolName "standard"
+; NOT: Setup.exe Inno Setup build sonrasi publish-release.ps1 tarafindan
+; signtool ile imzalanir (Inno Setup SignTool param. PowerShell escape
+; sorununa takiliyor, dolayisiyla harici imzalama daha guvenilir).
 
 [Setup]
 ; AppId tek surumler arasinda kalmalidir (ayni installer'in update'i icin)
 AppId={{B7E8F392-4D5A-4F1B-9C2D-7E8A1B4F6C9E}
-SignTool={#SignToolName}
-SignedUninstaller=yes
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}

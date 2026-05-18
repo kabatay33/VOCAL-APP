@@ -210,23 +210,19 @@ if (-not $iscc) {
   } else {
     Push-Location (Split-Path $issFile -Parent)
     try {
-      $isccArgs = @("/DAppVersion=$Version")
-      if ($canSign) {
-        # Inno Setup'a SignTool "standard" tanimi: kendi signtool komutumuz.
-        # $f Inno Setup tarafindan dosya yoluna replaced edilir.
-        $signCmd = "`"$signtool`" sign /f `"$certPath`" /p $certPassword /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /d LocalHub `$f"
-        $isccArgs += "/Sstandard=$signCmd"
-      } else {
-        # Sertifika yoksa Inno Setup'taki SignTool referansini etkisizlestir
-        $isccArgs += '/Sstandard=echo skip-sign'
-      }
-      $isccArgs += $issFile
-      & $iscc @isccArgs
+      & $iscc "/DAppVersion=$Version" $issFile
       if ($LASTEXITCODE -ne 0) {
         Write-Warning "Inno Setup build hatasi (exit $LASTEXITCODE) - installer olusturulamadi"
       } else {
         $setupOut = Join-Path (Split-Path $issFile -Parent) "Output\LocalHub-Setup-$Version.exe"
         if (Test-Path $setupOut) {
+          # Setup.exe'yi signtool ile imzala (Inno Setup'tan ayri)
+          if ($canSign) {
+            Write-Host "  Setup.exe imzalaniyor..."
+            if (Sign-File $setupOut) {
+              Write-Host "  Setup.exe imzalandi"
+            }
+          }
           $setupSize = (Get-Item $setupOut).Length / 1MB
           # dist klasorune kopya
           Copy-Item $setupOut $distDir -Force
@@ -253,30 +249,26 @@ $ghArgs = @('release', 'create', "v$Version") + $releaseFiles + @('--title', "v$
 if ($NotesFile -and (Test-Path $NotesFile)) {
   $ghArgs += @('--notes-file', $NotesFile)
 } else {
-  $defaultNotes = @"
-## LocalHub $Version
-
-### Indirme
-- **Yeni kurulum:** ``LocalHub-Setup-$Version.exe``
-- **Mevcut kullanicilar:** otomatik guncellenir (uygulamayi acin)
-
-### Windows SmartScreen Uyarisi
-
-LocalHub henuz Microsoft tarafindan tanimlanan bir kod imzalama
-sertifikasi ile imzalanmadi (binlerce dolarlik EV sertifikasi gerekir).
-Bu yuzden ilk kurulumda **SmartScreen "Windows korumasi" uyarisi**
-gosterebilir. Guvenlik acisindan tehlike yoktur — kaynak kodu acik:
-https://github.com/kabatay33/LocalHub
-
-**Uyariyi gecmek icin:**
-1. ``Daha fazla bilgi`` (More info) baglantisina tikla
-2. Ac1lan ekrandan ``Yine de calistir`` (Run anyway) butonuna bas
-3. Setup acilir, kurulum normal sekilde devam eder
-
-Bir kez kurulumu yaptiktan sonra otomatik guncellemeler bu uyariyi
-tetiklemez.
-"@
-  $ghArgs += @('--notes', $defaultNotes)
+  # gh CLI'in here-string'leri yorumlama sorunundan kacinmak icin temp
+  # dosyaya yaz ve --notes-file kullan.
+  $tempNotesFile = Join-Path $env:TEMP "LocalHub-notes-$Version.md"
+  $defaultNotes = "## LocalHub $Version`n`n" +
+    "### Indirme`n" +
+    "- **Yeni kurulum:** ``LocalHub-Setup-$Version.exe```n" +
+    "- **Mevcut kullanicilar:** otomatik guncellenir (uygulamayi acin)`n`n" +
+    "### Windows SmartScreen Uyarisi`n`n" +
+    "LocalHub henuz Microsoft tarafindan tanimlanan bir kod imzalama " +
+    "sertifikasi ile imzalanmadi (EV sertifika ~``$300/yil). Self-signed " +
+    "sertifika ile imzalandi - publisher artik ``LocalHub`` olarak gozukur, " +
+    "ama SmartScreen yine de uyari verebilir. Guvenlik acisindan tehlike " +
+    "yoktur, kaynak kodu acik: https://github.com/kabatay33/LocalHub`n`n" +
+    "**Uyariyi gecmek icin:**`n" +
+    "1. ``Daha fazla bilgi`` (More info) baglantisina tikla`n" +
+    "2. ``Yine de calistir`` (Run anyway) butonuna bas`n" +
+    "3. Kurulum normal sekilde devam eder`n`n" +
+    "Bir kez kurulumdan sonra otomatik guncellemeler bu uyariyi tetiklemez."
+  Set-Content -Path $tempNotesFile -Value $defaultNotes -Encoding UTF8
+  $ghArgs += @('--notes-file', $tempNotesFile)
 }
 & gh @ghArgs
 if ($LASTEXITCODE -ne 0) {
