@@ -50,3 +50,5 @@ Thumbs.db
 # WASAPI debug
 flutter_app/wasapi_debug.log
 **/wasapi_debug.log
+
+installer/Output/
