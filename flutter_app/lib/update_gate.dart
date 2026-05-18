@@ -20,7 +20,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'config.dart';
-import 'main.dart' show Bootstrap;
+import 'main.dart' show Bootstrap, invisibleSpawn;
 import 'storage.dart';
 
 class UpdateGate extends StatefulWidget {
@@ -346,16 +346,20 @@ rmdir /S /Q "%SRC%" 2>nul
       debugPrint('[UpdateGate] Apply script yazildi: $scriptPath');
       debugPrint('[UpdateGate] Apply log dosyasi: $logPath');
 
-      // CMD'yi DETACHED olarak başlat — Dart Process.start detached mode
-      // CREATE_NEW_PROCESS_GROUP + DETACHED_PROCESS Win32 flag'larini
-      // ekler, parent öldükten sonra çocuk çalışmaya devam eder.
-      final proc = await Process.start(
-        'cmd.exe',
+      // CMD'yi Win32 CreateProcessW + CREATE_NO_WINDOW ile başlat —
+      // Dart'ın Process.start detached mode'unda CREATE_NO_WINDOW flag'i
+      // yok, bu yüzden cmd.exe görünür console penceresi açıyor.
+      // invisibleSpawn (FFI) bu flag'i set eder → pencere açılmaz.
+      final spawned = invisibleSpawn(
+        r'C:\Windows\System32\cmd.exe',
         ['/c', scriptPath],
-        mode: ProcessStartMode.detached,
-        runInShell: false,
+        tempDir,
       );
-      debugPrint('[UpdateGate] Apply script spawn PID: ${proc.pid}');
+      if (!spawned) {
+        debugPrint('[UpdateGate] invisibleSpawn basarisiz');
+        return false;
+      }
+      debugPrint('[UpdateGate] Apply script invisible spawn edildi');
 
       // Spawn'in tetiklenmesi için kısa bir bekleme (script ilk satırı
       // log'a yazmaya başlayabilsin)

@@ -1,4 +1,6 @@
+import 'dart:ffi';
 import 'dart:io';
+import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
@@ -75,6 +77,72 @@ Future<void> main() async {
         debugPrint('[MAIN] Window/tray init hata: $e');
       }
     });
+  }
+}
+
+/// Win32 CreateProcessW + CREATE_NO_WINDOW + DETACHED_PROCESS.
+/// Konsol penceresi açmadan + parent öldükten sonra da yaşamaya devam eder.
+/// Apply script (update) spawn için kullanılır — kullanıcı CMD penceresi
+/// görmez.
+bool invisibleSpawn(String exePath, List<String> args, String workingDir) {
+  try {
+    const createNoWindow = 0x08000000;
+    const detachedProcess = 0x00000008;
+    const createNewProcessGroup = 0x00000200;
+    const flags = createNoWindow | detachedProcess | createNewProcessGroup;
+
+    final kernel32 = DynamicLibrary.open('kernel32.dll');
+    final createProcessW = kernel32.lookupFunction<
+        Int32 Function(Pointer<Utf16>, Pointer<Utf16>, Pointer<Void>,
+            Pointer<Void>, Int32, Uint32, Pointer<Void>, Pointer<Utf16>,
+            Pointer<Uint8>, Pointer<Uint8>),
+        int Function(Pointer<Utf16>, Pointer<Utf16>, Pointer<Void>,
+            Pointer<Void>, int, int, Pointer<Void>, Pointer<Utf16>,
+            Pointer<Uint8>, Pointer<Uint8>)>('CreateProcessW');
+    final closeHandle = kernel32.lookupFunction<
+        Int32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)>('CloseHandle');
+
+    // STARTUPINFOW: 104 bytes (sizeof)
+    final si = calloc<Uint8>(104);
+    si.cast<Uint32>().value = 104;
+    // PROCESS_INFORMATION: 24 bytes
+    final pi = calloc<Uint8>(24);
+
+    final cmdBuf = StringBuffer('"$exePath"');
+    for (final a in args) {
+      cmdBuf.write(' "$a"');
+    }
+    final cmdLine = cmdBuf.toString().toNativeUtf16();
+    final dirPtr = workingDir.toNativeUtf16();
+
+    try {
+      final ok = createProcessW(
+        nullptr,
+        cmdLine,
+        nullptr,
+        nullptr,
+        0,
+        flags,
+        nullptr,
+        dirPtr,
+        si,
+        pi,
+      );
+      if (ok == 0) return false;
+      final piPtr = pi.cast<IntPtr>();
+      closeHandle(Pointer<Void>.fromAddress(piPtr.value));
+      closeHandle(Pointer<Void>.fromAddress((piPtr + 1).value));
+      return true;
+    } finally {
+      malloc.free(cmdLine);
+      malloc.free(dirPtr);
+      malloc.free(si);
+      malloc.free(pi);
+    }
+  } catch (e) {
+    debugPrint('[MAIN] invisibleSpawn hata: $e');
+    return false;
   }
 }
 
