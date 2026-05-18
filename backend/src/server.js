@@ -811,6 +811,8 @@ app.post(
         `INSERT OR IGNORE INTO user_roles (server_id, user_id, role_id, assigned_at)
          VALUES (?, ?, ?, ?)`
       ).run(serverId, targetUserId, roleId, Date.now());
+      // Hedef kullanıcıya yeni izinlerini bildir (anlık güncelleme için)
+      _notifyPermissionsUpdated(serverId, targetUserId);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -833,6 +835,8 @@ app.delete(
       db.prepare(
         'DELETE FROM user_roles WHERE server_id = ? AND user_id = ? AND role_id = ?'
       ).run(serverId, targetUserId, roleId);
+      // Hedef kullanıcıya güncellenmiş izinlerini bildir
+      _notifyPermissionsUpdated(serverId, targetUserId);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -1148,6 +1152,21 @@ function findWsByUserId(userId) {
     if (info.userId === userId) return ws;
   }
   return null;
+}
+
+/// Kullanıcının rol değişikliği sonrası güncellenmiş permissions'ını WS ile gönder.
+function _notifyPermissionsUpdated(serverId, userId) {
+  try {
+    const ws = findWsByUserId(userId);
+    if (ws && ws.readyState === ws.OPEN) {
+      const newPerms = computeUserPermissions(serverId, userId);
+      ws.send(JSON.stringify({
+        type: 'permissions-updated',
+        serverId,
+        permissions: newPerms,
+      }));
+    }
+  } catch (_) {}
 }
 
 function getVoiceMembers(channelId) {

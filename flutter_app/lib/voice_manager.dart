@@ -6,6 +6,57 @@ import 'screen_share_options.dart';
 
 typedef SignalSender = void Function(int toUserId, Map<String, dynamic> payload);
 
+/// Opus codec'in SDP fmtp parametrelerini yüksek kaliteli stereo ses için
+/// günceller — ekran paylaşımının sistem sesinin müzikalitesi/sürekliliği
+/// için kritik. WebRTC'nin varsayılanı VoIP modudur (mono 32kbps + DTX);
+/// bu DTX (Discontinuous Transmission) sessizlik anlarında yayını keser,
+/// müzik/oyun sesi için "kesik kesik" duyulmasına sebep olur.
+///
+/// Eklediğimiz/değiştirdiğimiz parametreler:
+///   stereo=1, sprop-stereo=1  → stereo aç
+///   maxaveragebitrate=128000  → 128 kbps hedef bitrate
+///   maxplaybackrate=48000     → tam bandwidth
+///   useinbandfec=1            → paket kaybı korumalı
+///   usedtx=0                  → DTX kapalı (sürekli yayın)
+///   cbr=0                     → variable bitrate (kalite önceliği)
+String _mungeOpusSdpForHighQuality(String sdp) {
+  // Tüm m=audio bloklarında ki opus fmtp satırını yenile/ekle.
+  final lines = sdp.split('\r\n');
+  // payload type -> opus tespiti
+  final opusPts = <String>{};
+  for (final line in lines) {
+    // örn: a=rtpmap:111 opus/48000/2
+    final m = RegExp(r'^a=rtpmap:(\d+) opus/').firstMatch(line);
+    if (m != null) opusPts.add(m.group(1)!);
+  }
+  if (opusPts.isEmpty) return sdp;
+
+  const desired = 'minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;'
+      'maxaveragebitrate=192000;maxplaybackrate=48000;usedtx=0;cbr=0';
+
+  final out = <String>[];
+  final seenFmtp = <String>{};
+  for (final line in lines) {
+    final m = RegExp(r'^a=fmtp:(\d+) ').firstMatch(line);
+    if (m != null && opusPts.contains(m.group(1))) {
+      // Bu opus için fmtp — bizimkiyle değiştir
+      out.add('a=fmtp:${m.group(1)} $desired');
+      seenFmtp.add(m.group(1)!);
+    } else {
+      out.add(line);
+    }
+  }
+  // Eksik fmtp varsa rtpmap'in hemen ardına ekle
+  for (final pt in opusPts) {
+    if (seenFmtp.contains(pt)) continue;
+    final idx = out.indexWhere((l) => l.startsWith('a=rtpmap:$pt opus/'));
+    if (idx >= 0) {
+      out.insert(idx + 1, 'a=fmtp:$pt $desired');
+    }
+  }
+  return out.join('\r\n');
+}
+
 /// Sesli kanal için her bir uzak kullanıcıyı temsil eder.
 class VoicePeer {
   final int userId;
@@ -47,6 +98,8 @@ class VoiceManager extends ChangeNotifier {
   final Map<int, List<RTCRtpSender>> _cameraSenders = {};
   // peer userId -> volume multiplier (0.0 = sessiz, 1.0 = normal, 2.0 = 200%)
   final Map<int, double> _peerVolumes = {};
+  // peer userId -> ekran paylaşımı ses seviyesi (ayrı kontrol)
+  final Map<int, double> _screenShareVolumes = {};
   // peer userId -> { stream.id -> 'camera' | 'screen' } — uzak video track'i
   // hangi tür olduğunu belirlemek için signal channel üzerinden gelen bilgi
   final Map<int, Map<String, String>> _peerStreamTypes = {};
@@ -54,6 +107,8 @@ class VoiceManager extends ChangeNotifier {
   ScreenShareOptions _lastScreenOpts = ScreenShareOptions.defaults;
   bool _muted = false;
   bool _deafened = false;
+  // Deafen açılmadan önceki mic durumunu sakla (un-deafen'de geri yükle)
+  bool _mutedBeforeDeafen = false;
   bool _isScreenSharing = false;
   bool _isCameraSharing = false;
   String? _preferredCameraDeviceId;
@@ -90,8 +145,8 @@ class VoiceManager extends ChangeNotifier {
   int get preferredCameraWidth => _preferredCameraWidth;
   int get preferredCameraFps => _preferredCameraFps;
 
-  /// Kamera tercihlerini ayarlar. Sesli kanalda kamera aktifse ve cihaz
-  /// değiştiyse switchCamera otomatik çağrılır.
+  /// Kamera tercihlerini ayarlar. Sesli kanalda kamera aktifse cihaz,
+  /// çözünürlük veya FPS değişiminde switchCamera otomatik çağrılır.
   Future<void> setCameraPreferences({
     String? deviceId,
     int? width,
@@ -99,11 +154,20 @@ class VoiceManager extends ChangeNotifier {
   }) async {
     final deviceChanged =
         deviceId != null && deviceId != _preferredCameraDeviceId;
+    final widthChanged = width != null && width != _preferredCameraWidth;
+    final fpsChanged = fps != null && fps != _preferredCameraFps;
+
     if (deviceId != null) _preferredCameraDeviceId = deviceId;
     if (width != null) _preferredCameraWidth = width;
     if (fps != null) _preferredCameraFps = fps;
-    if (deviceChanged && _isCameraSharing) {
-      await switchCamera(deviceId);
+
+    // Kamera aktifken herhangi bir ayar değiştiyse track'i yenile
+    if (_isCameraSharing &&
+        (deviceChanged || widthChanged || fpsChanged)) {
+      final id = _preferredCameraDeviceId;
+      if (id != null) {
+        await switchCamera(id);
+      }
     }
   }
   Iterable<VoicePeer> get peers => _peers.values;
@@ -287,21 +351,32 @@ class VoiceManager extends ChangeNotifier {
       'frameRate': {'ideal': opts.frameRate, 'max': opts.frameRate},
     };
 
+    // Sistem sesini yakalarken echo/AGC/NS kapalı olmalı — bunlar mic için
+    // tasarlanmış ve sistem sesini distort eder (kesintili/boğuk gelir).
+    final systemAudioConstraint = <String, dynamic>{
+      'echoCancellation': false,
+      'autoGainControl': false,
+      'noiseSuppression': false,
+      'googAutoGainControl': false,
+      'googEchoCancellation': false,
+      'googNoiseSuppression': false,
+    };
+
     if (sourceId == null) {
       // Mobile/web: sistem dialog'u — sistem sesini de yakalamayı dene
       stream = await navigator.mediaDevices.getDisplayMedia({
         'video': qualityConstraints,
-        'audio': true,
+        'audio': systemAudioConstraint,
       });
     } else {
-      // Deneme 1: deviceId + audio: true (yeni standard API)
+      // Deneme 1: deviceId + sistem ses constraint'leri (yeni standard API)
       try {
         stream = await navigator.mediaDevices.getDisplayMedia({
           'video': {
             'deviceId': {'exact': sourceId},
             ...qualityConstraints,
           },
-          'audio': true,
+          'audio': systemAudioConstraint,
         });
       } catch (e) {
         lastError = e;
@@ -520,9 +595,9 @@ class VoiceManager extends ChangeNotifier {
   Future<void> _applyBitrate(
       List<RTCRtpSender> senders, int maxBitrateKbps) async {
     final videoBitrateBps = maxBitrateKbps * 1000;
-    // Sistem sesi (müzik/oyun) için 128 kbps stereo opus — HiFi kalite.
+    // Sistem sesi (müzik/oyun) için 192 kbps stereo opus — HiFi+ kalite.
     // WebRTC opus varsayılanı VoIP için ~32 kbps mono, müzik için çok düşük.
-    const int audioBitrateBps = 128 * 1000;
+    const int audioBitrateBps = 192 * 1000;
 
     for (final sender in senders) {
       final kind = sender.track?.kind;
@@ -612,7 +687,8 @@ class VoiceManager extends ChangeNotifier {
       'video': videoConstraint,
     });
     _cameraStream = stream;
-    _preferredCameraDeviceId = deviceId;
+    // Hangi cihaz kullanıldıysa onu tercih olarak sakla (null override bug fix)
+    _preferredCameraDeviceId = effectiveId;
 
     // Track bitince (cihaz çekildi vs.) otomatik kapan
     final tracks = stream.getVideoTracks();
@@ -713,11 +789,14 @@ class VoiceManager extends ChangeNotifier {
 
   Future<void> _renegotiate(VoicePeer peer) async {
     final offer = await peer.pc.createOffer({});
-    await peer.pc.setLocalDescription(offer);
+    // Opus stereo/no-DTX munging — ekran paylaşım sesi sürekli aksın diye
+    final mungedSdp = _mungeOpusSdpForHighQuality(offer.sdp ?? '');
+    final mungedOffer = RTCSessionDescription(mungedSdp, offer.type);
+    await peer.pc.setLocalDescription(mungedOffer);
     _sendSignal(peer.userId, {
       'kind': 'offer',
-      'sdp': offer.sdp,
-      'type': offer.type,
+      'sdp': mungedOffer.sdp,
+      'type': mungedOffer.type,
     });
   }
 
@@ -802,7 +881,15 @@ class VoiceManager extends ChangeNotifier {
   String? get preferredAudioOutputId => _preferredAudioOutputId;
 
   void toggleMute() {
-    _muted = !_muted;
+    // Deafen aktifken mic butonuna basılırsa: sadece deafen'i kaldır,
+    // ama mute'u deafen öncesi duruma göre koru.
+    if (_deafened) {
+      _deafened = false;
+      // _mutedBeforeDeafen zaten saklı — geri yükle
+      _muted = _mutedBeforeDeafen;
+    } else {
+      _muted = !_muted;
+    }
     _applyAudioState();
     notifyListeners();
   }
@@ -818,6 +905,31 @@ class VoiceManager extends ChangeNotifier {
 
   double getPeerVolume(int userId) => _peerVolumes[userId] ?? 1.0;
 
+  /// Belirli bir kullanıcının ekran paylaşımı ses seviyesini ayarla (0.0 - 2.0).
+  /// Ekran paylaşımı ile gelen sistem sesini bağımsız olarak kontrol eder.
+  Future<void> setScreenShareVolume(int userId, double volume) async {
+    final clamped = volume.clamp(0.0, 2.0).toDouble();
+    _screenShareVolumes[userId] = clamped;
+    await _applyScreenShareVolume(userId);
+    notifyListeners();
+  }
+
+  double getScreenShareVolume(int userId) => _screenShareVolumes[userId] ?? 1.0;
+
+  Future<void> _applyScreenShareVolume(int userId) async {
+    final peer = _peers[userId];
+    final stream = peer?.remoteScreenStream;
+    if (stream == null) return;
+    final volume = _screenShareVolumes[userId] ?? 1.0;
+    for (final track in stream.getAudioTracks()) {
+      try {
+        await Helper.setVolume(volume, track);
+      } catch (e) {
+        debugPrint('[VOICE] screenShare setVolume hatası ($userId): $e');
+      }
+    }
+  }
+
   Future<void> _applyPeerVolume(int userId) async {
     final peer = _peers[userId];
     final stream = peer?.remoteAudioStream;
@@ -832,19 +944,29 @@ class VoiceManager extends ChangeNotifier {
     }
   }
 
-  /// Discord davranışı: deafen açıkken hem gelen ses kapanır hem de
-  /// kendi mikrofonun mute olur. Kapatınca eski mute durumu geri gelir.
+  /// Discord davranışı: deafen açılınca mic de mute olur (ikonlar kırmızı).
+  /// Deafen kapanınca mic, deafen öncesi durumuna döner.
+  /// Mic kapatılırsa deafen etkilenmez.
   void toggleDeafen() {
-    _deafened = !_deafened;
+    if (_deafened) {
+      // Sağırlığı kaldır — mic'i önceki duruma geri yükle
+      _deafened = false;
+      _muted = _mutedBeforeDeafen;
+    } else {
+      // Sağırlaştır — mic'in şu anki durumunu sakla, sonra mute et
+      _mutedBeforeDeafen = _muted;
+      _deafened = true;
+      _muted = true; // Deafen → mic de görsel olarak mute
+    }
     _applyAudioState();
     notifyListeners();
   }
 
   void _applyAudioState() {
-    // Kendi mikrofon: deafen veya mute aktifse kapalı
+    // Kendi mikrofon: mute veya deafen aktifse kapalı
     if (_localStream != null) {
       for (final track in _localStream!.getAudioTracks()) {
-        track.enabled = !_muted && !_deafened;
+        track.enabled = !_muted;
       }
     }
     // Gelen sesler: deafen aktifse kapalı
@@ -860,11 +982,13 @@ class VoiceManager extends ChangeNotifier {
   Future<void> _createPeerAndOffer(int userId, String username) async {
     final peer = await _createPeer(userId, username);
     final offer = await peer.pc.createOffer({});
-    await peer.pc.setLocalDescription(offer);
+    final mungedSdp = _mungeOpusSdpForHighQuality(offer.sdp ?? '');
+    final mungedOffer = RTCSessionDescription(mungedSdp, offer.type);
+    await peer.pc.setLocalDescription(mungedOffer);
     _sendSignal(userId, {
       'kind': 'offer',
-      'sdp': offer.sdp,
-      'type': offer.type,
+      'sdp': mungedOffer.sdp,
+      'type': mungedOffer.type,
     });
   }
 
@@ -999,16 +1123,21 @@ class VoiceManager extends ChangeNotifier {
       final wasNewPeer = !_peers.containsKey(fromUserId);
       final peer = _peers[fromUserId] ??
           await _createPeer(fromUserId, fromUsername);
+      // Karşıdan gelen SDP'yi de munge'le — karşı taraf eski sürüm olsa bile
+      // bizim taraftan stereo + no-DTX kabul edelim.
+      final remoteSdp =
+          _mungeOpusSdpForHighQuality(payload['sdp'] as String);
       await peer.pc.setRemoteDescription(
-        RTCSessionDescription(
-            payload['sdp'] as String, payload['type'] as String),
+        RTCSessionDescription(remoteSdp, payload['type'] as String),
       );
       final answer = await peer.pc.createAnswer({});
-      await peer.pc.setLocalDescription(answer);
+      final mungedSdp = _mungeOpusSdpForHighQuality(answer.sdp ?? '');
+      final mungedAnswer = RTCSessionDescription(mungedSdp, answer.type);
+      await peer.pc.setLocalDescription(mungedAnswer);
       _sendSignal(fromUserId, {
         'kind': 'answer',
-        'sdp': answer.sdp,
-        'type': answer.type,
+        'sdp': mungedAnswer.sdp,
+        'type': mungedAnswer.type,
       });
 
       // Yeni peer durumu: B yeni katıldı, sadece kendi mikrofonunu offer'a
@@ -1068,8 +1197,10 @@ class VoiceManager extends ChangeNotifier {
     } else if (kind == 'answer') {
       final peer = _peers[fromUserId];
       if (peer != null) {
+        final remoteSdp =
+            _mungeOpusSdpForHighQuality(payload['sdp'] as String);
         await peer.pc.setRemoteDescription(
-          RTCSessionDescription(payload['sdp'] as String, payload['type'] as String),
+          RTCSessionDescription(remoteSdp, payload['type'] as String),
         );
       }
     } else if (kind == 'ice') {

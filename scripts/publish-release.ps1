@@ -141,20 +141,65 @@ Write-Host "  backend bundle: $($backendSize.ToString('F1')) MB"
 Write-Host "`n[5/7] version.txt yaziliyor: $Version"
 Set-Content -Path (Join-Path $releaseDir "version.txt") -Value $Version -NoNewline -Encoding ASCII
 
-# 6) Zip
-Write-Host "`n[6/7] Zip olusturuluyor..."
+# 6) Zip (otomatik guncelleme paketi - mevcut kullanicilar icin)
+Write-Host "`n[6/8] Zip olusturuluyor..."
 if (Test-Path $zipOut) { Remove-Item $zipOut -Force }
 Compress-Archive -Path "$releaseDir\*" -DestinationPath $zipOut -Force
 $zipSize = (Get-Item $zipOut).Length / 1MB
 Write-Host "  $zipOut ($($zipSize.ToString('F2')) MB)"
 
-# 7) gh release create
-Write-Host "`n[7/7] GitHub Release olusturuluyor: v$Version"
-$ghArgs = @('release', 'create', "v$Version", $zipOut, '--title', "v$Version")
+# 7) Setup installer (yeni kullanicilar icin)
+Write-Host "`n[7/8] Setup installer olusturuluyor..."
+$isccCandidates = @(
+  "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe",
+  "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+  "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+)
+$iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$setupOut = $null
+if (-not $iscc) {
+  Write-Warning "Inno Setup bulunamadi - installer olusturulmadi. Kurmak icin: winget install JRSoftware.InnoSetup"
+} else {
+  $issFile = Join-Path $projectRoot 'installer\LocalHub.iss'
+  if (-not (Test-Path $issFile)) {
+    Write-Warning "installer\LocalHub.iss bulunamadi - installer atlandi"
+  } else {
+    Push-Location (Split-Path $issFile -Parent)
+    try {
+      & $iscc "/DAppVersion=$Version" $issFile
+      if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Inno Setup build hatasi (exit $LASTEXITCODE) - installer olusturulamadi"
+      } else {
+        $setupOut = Join-Path (Split-Path $issFile -Parent) "Output\LocalHub-Setup-$Version.exe"
+        if (Test-Path $setupOut) {
+          $setupSize = (Get-Item $setupOut).Length / 1MB
+          # dist klasorune kopya
+          Copy-Item $setupOut $distDir -Force
+          $setupOut = Join-Path $distDir "LocalHub-Setup-$Version.exe"
+          Write-Host "  $setupOut ($($setupSize.ToString('F2')) MB)"
+        } else {
+          Write-Warning "Setup exe bulunamadi: $setupOut"
+          $setupOut = $null
+        }
+      }
+    } finally {
+      Pop-Location
+    }
+  }
+}
+
+# 8) gh release create — hem zip hem setup yukle
+Write-Host "`n[8/8] GitHub Release olusturuluyor: v$Version"
+$releaseFiles = @($zipOut)
+if ($setupOut -and (Test-Path $setupOut)) {
+  $releaseFiles += $setupOut
+}
+$ghArgs = @('release', 'create', "v$Version") + $releaseFiles + @('--title', "v$Version")
 if ($NotesFile -and (Test-Path $NotesFile)) {
   $ghArgs += @('--notes-file', $NotesFile)
 } else {
-  $ghArgs += @('--notes', "LocalHub $Version - Otomatik guncelleme")
+  $defaultNotes = "LocalHub $Version`n`n- Yeni kurulum icin: LocalHub-Setup-$Version.exe`n- Mevcut kullanicilar otomatik guncellenir"
+  $ghArgs += @('--notes', $defaultNotes)
 }
 & gh @ghArgs
 if ($LASTEXITCODE -ne 0) {
@@ -164,5 +209,6 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "`n[OK] Release yayinlandi: v$Version"
 Write-Host "  Zip: $zipOut"
+if ($setupOut) { Write-Host "  Setup: $setupOut" }
 Write-Host "  URL: https://github.com/kabatay33/LocalHub/releases/tag/v$Version"
-Write-Host "`nKullanicilar app actiginda updater.exe otomatik guncelleyecek."
+Write-Host "`nKullanicilar app actiginda otomatik guncelleyecek."

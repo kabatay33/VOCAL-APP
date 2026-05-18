@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 import 'backend_process_service.dart';
-import 'tunnel_service.dart';
 
 /// System tray entegrasyonu.
 ///

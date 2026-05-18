@@ -578,6 +578,25 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         });
       }
+    } else if (type == 'permissions-updated') {
+      // Rol atama/kaldırma sonrası kendi permission'larımız güncellendi
+      final permsServerId = (msg['serverId'] as num?)?.toInt();
+      final newPerms = (msg['permissions'] as num?)?.toInt();
+      if (!mounted || permsServerId == null || newPerms == null) return;
+      if (_activeServer?.id == permsServerId) {
+        final s = _activeServer!;
+        setState(() {
+          _activeServer = ServerInfo(
+            id: s.id,
+            name: s.name,
+            ownerUserId: s.ownerUserId,
+            inviteCode: s.inviteCode,
+            createdAt: s.createdAt,
+            myRole: s.myRole,
+            myPermissions: newPerms,
+          );
+        });
+      }
     }
   }
 
@@ -727,7 +746,6 @@ class _ChatScreenState extends State<ChatScreen> {
         await _voice.startScreenShare(
             sourceId: result, options: _shareOptions);
       }
-      _showScreenShareStatus();
       // Paylaşım başladıktan sonra uygulamayı tekrar öne getir
       await Future.delayed(const Duration(milliseconds: 300));
       try {
@@ -944,16 +962,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _showScreenShareStatus() {
-    final audioCount = _voice.screenShareAudioTrackCount;
-    if (audioCount > 0) {
-      _showSnack(
-          'Yayın aktif: görüntü + sistem sesi paylaşılıyor (kendi uygulama sesi hariç)');
-    } else {
-      _showSnack(
-          'Yayın aktif: sadece görüntü paylaşılıyor (sistem sesi yakalanamadı)');
-    }
-  }
 
   void _openScreenViewer() {
     showDialog<void>(
@@ -1064,22 +1072,9 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF202225),
         foregroundColor: Colors.white,
-        title: Row(
-          children: [
-            const Text(
-              'LocalHub',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(width: 12),
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _connected ? Colors.greenAccent : Colors.redAccent,
-              ),
-            ),
-          ],
+        title: const Text(
+          'LocalHub',
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
           IconButton(
@@ -1117,8 +1112,6 @@ class _ChatScreenState extends State<ChatScreen> {
                   ],
                 ),
               ),
-              if (_voice.inVoice)
-                SizedBox(height: 56, child: _buildVoiceStatusBar()),
             ],
           ),
           // Sağ alt köşe: kendi yayınımızın canlı önizlemesi (PIP)
@@ -1127,7 +1120,7 @@ class _ChatScreenState extends State<ChatScreen> {
               (_voice.isCameraSharing || _voice.isScreenSharing))
             Positioned(
               right: _previewOffset.dx,
-              bottom: (_voice.inVoice ? 56 : 0) + _previewOffset.dy,
+              bottom: _previewOffset.dy,
               child: _buildLocalPreviewOverlay(),
             ),
         ],
@@ -1531,6 +1524,8 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
           ),
+          if (_voice.inVoice) _buildSidebarVoicePanel(),
+          _buildSidebarConnectionStatus(),
           _userFooter(),
         ],
       ),
@@ -1750,6 +1745,46 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Sol alt köşe — kullanıcı adı alanının hemen üstünde minimal bağlantı durumu.
+  Widget _buildSidebarConnectionStatus() {
+    final serverName = _activeServer?.name ?? 'LocalHub';
+    return Container(
+      color: const Color(0xFF232428),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      child: Row(
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _connected ? Colors.greenAccent : Colors.redAccent,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              _connected ? serverName : 'Bağlanıyor...',
+              style: TextStyle(
+                color: _connected
+                    ? Colors.greenAccent.withValues(alpha: 0.85)
+                    : Colors.white38,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (_lastPingMs != null)
+            Text(
+              '${_lastPingMs}ms',
+              style: const TextStyle(color: Colors.white24, fontSize: 10),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _userFooter() => Material(
         color: const Color(0xFF292B2F),
         child: InkWell(
@@ -1800,130 +1835,119 @@ class _ChatScreenState extends State<ChatScreen> {
     _openSettings();
   }
 
-  Widget _buildVoiceStatusBar() {
+  /// Sidebar'da kullanıcı footer'ının hemen üzerinde sesli kanalda iken
+  /// gözüken minimal kontrol paneli. Mute / Deafen / Kamera / Ekran paylaş /
+  /// Ayrıl butonları kompakt şekilde tek satırda yer alır.
+  Widget _buildSidebarVoicePanel() {
     final channel = _channels.firstWhere(
       (c) => c.id == _voice.currentChannelId,
       orElse: () => Channel(id: 0, name: '?', type: 'voice'),
     );
-    final ping = _lastPingMs;
-    final IconData pingIcon;
-    final Color pingColor;
-    if (ping == null) {
-      pingIcon = Icons.signal_cellular_connected_no_internet_0_bar;
-      pingColor = Colors.white54;
-    } else if (ping < 100) {
-      pingIcon = Icons.signal_cellular_4_bar;
-      pingColor = Colors.greenAccent;
-    } else if (ping < 200) {
-      pingIcon = Icons.signal_cellular_alt_2_bar;
-      pingColor = Colors.lightGreenAccent;
-    } else if (ping < 400) {
-      pingIcon = Icons.signal_cellular_alt_1_bar;
-      pingColor = Colors.amberAccent;
-    } else {
-      pingIcon = Icons.signal_cellular_0_bar;
-      pingColor = Colors.redAccent;
+    Widget miniBtn({
+      required IconData icon,
+      required Color color,
+      required String tooltip,
+      required VoidCallback onPressed,
+    }) {
+      return Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(4),
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Icon(icon, color: color, size: 16),
+          ),
+        ),
+      );
     }
-    final pingTooltip =
-        ping == null ? 'Ping ölçülüyor...' : 'Ping: $ping ms';
 
     return Container(
       color: const Color(0xFF1F4D2E),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Tooltip(
-            message: pingTooltip,
-            child: Icon(pingIcon, color: pingColor, size: 18),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Ses Bağlı',
-                    style: TextStyle(
-                        color: Colors.greenAccent,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold)),
-                Text(
-                  '🔊 ${channel.name}',
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
+          // Kanal adı (kompakt)
+          Row(
+            children: [
+              const Icon(Icons.volume_up,
+                  color: Colors.greenAccent, size: 13),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  channel.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
                   overflow: TextOverflow.ellipsis,
                 ),
-              ],
-            ),
-          ),
-          // Kanal kontrolleri (kamera, paylaş, ayrıl)
-          IconButton(
-            icon: Icon(
-              _voice.isCameraSharing ? Icons.videocam : Icons.videocam_off,
-              color: _voice.isCameraSharing
-                  ? Colors.greenAccent
-                  : Colors.white,
-            ),
-            tooltip: _voice.isCameraSharing
-                ? 'Kamerayı kapat'
-                : 'Kamerayı aç',
-            onPressed: _toggleCamera,
-          ),
-          IconButton(
-            icon: Icon(
-              Icons.screen_share,
-              color: _voice.isScreenSharing
-                  ? Colors.orangeAccent
-                  : Colors.white,
-            ),
-            tooltip: _voice.isScreenSharing
-                ? 'Paylaşım menüsü (değiştir / durdur)'
-                : 'Ekran paylaş',
-            onPressed: _chooseScreenSource,
-          ),
-          // Önizleme overlay aç/kapat (sadece bir paylaşım aktifse)
-          if (_voice.isCameraSharing || _voice.isScreenSharing)
-            IconButton(
-              icon: Icon(
-                _previewVisible
-                    ? Icons.picture_in_picture_alt
-                    : Icons.picture_in_picture,
-                color: _previewVisible ? Colors.cyanAccent : Colors.white,
               ),
-              tooltip: _previewVisible
-                  ? 'Önizlemeyi gizle'
-                  : 'Önizlemeyi göster',
-              onPressed: () =>
-                  setState(() => _previewVisible = !_previewVisible),
-            ),
-          IconButton(
-            icon: const Icon(Icons.call_end, color: Colors.redAccent),
-            tooltip: 'Ayrıl',
-            onPressed: _leaveVoiceChannel,
+            ],
           ),
-          const SizedBox(width: 8),
-          // Kişisel kontroller — Discord düzeni: mute / deafen / settings
-          IconButton(
-            icon: Icon(
-              _voice.isMuted ? Icons.mic_off : Icons.mic,
-              color: _voice.isMuted ? Colors.redAccent : Colors.white,
-            ),
-            tooltip: _voice.isMuted ? 'Sesi aç' : 'Sustur',
-            onPressed: _voice.toggleMute,
-          ),
-          IconButton(
-            icon: Icon(
-              _voice.isDeafened ? Icons.headset_off : Icons.headset,
-              color:
-                  _voice.isDeafened ? Colors.redAccent : Colors.white,
-            ),
-            tooltip:
-                _voice.isDeafened ? 'Sağırlığı kapat' : 'Kendini sağırlaştır',
-            onPressed: _voice.toggleDeafen,
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings, color: Colors.white),
-            tooltip: 'Ayarlar',
-            onPressed: _openSettings,
+          const SizedBox(height: 4),
+          // Kontrol butonları — kompakt
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              miniBtn(
+                icon: _voice.isMuted ? Icons.mic_off : Icons.mic,
+                color: _voice.isMuted ? Colors.redAccent : Colors.white,
+                tooltip: _voice.isMuted ? 'Sesi aç' : 'Sustur',
+                onPressed: _voice.toggleMute,
+              ),
+              miniBtn(
+                icon: _voice.isDeafened ? Icons.headset_off : Icons.headset,
+                color: _voice.isDeafened ? Colors.redAccent : Colors.white,
+                tooltip: _voice.isDeafened
+                    ? 'Sağırlığı kapat'
+                    : 'Kendini sağırlaştır',
+                onPressed: _voice.toggleDeafen,
+              ),
+              miniBtn(
+                icon: _voice.isCameraSharing
+                    ? Icons.videocam
+                    : Icons.videocam_off,
+                color: _voice.isCameraSharing
+                    ? Colors.greenAccent
+                    : Colors.white,
+                tooltip: _voice.isCameraSharing
+                    ? 'Kamerayı kapat'
+                    : 'Kamerayı aç',
+                onPressed: _toggleCamera,
+              ),
+              miniBtn(
+                icon: _voice.isScreenSharing
+                    ? Icons.stop_screen_share
+                    : Icons.screen_share,
+                color: _voice.isScreenSharing
+                    ? Colors.redAccent
+                    : Colors.white,
+                tooltip: _voice.isScreenSharing
+                    ? 'Paylaşımı durdur'
+                    : 'Ekran paylaş',
+                onPressed: () async {
+                  if (_voice.isScreenSharing) {
+                    try {
+                      await _voice.stopScreenShare();
+                    } catch (e) {
+                      _showSnack('Paylaşım durdurulamadı: $e');
+                    }
+                  } else {
+                    _chooseScreenSource();
+                  }
+                },
+              ),
+              miniBtn(
+                icon: Icons.call_end,
+                color: Colors.redAccent,
+                tooltip: 'Ayrıl',
+                onPressed: _leaveVoiceChannel,
+              ),
+            ],
           ),
         ],
       ),
@@ -4991,36 +5015,34 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             Text(_cameraError!,
                 style: const TextStyle(color: Colors.redAccent))
           else if (!_camerasLoaded) ...[
-            // Sekme tıklanmadan önce buraya gelir; otomatik yükle.
             const Center(child: CircularProgressIndicator()),
           ] else ...[
-            // Önizleme alanı
-            AspectRatio(
-              aspectRatio: 16 / 9,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.black,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: Colors.white24),
-                ),
-                clipBehavior: Clip.hardEdge,
-                child: _previewRenderer != null
-                    ? RTCVideoView(
-                        _previewRenderer!,
-                        objectFit: RTCVideoViewObjectFit
-                            .RTCVideoViewObjectFitCover,
-                        mirror: true,
-                      )
-                    : Center(
-                        child: _previewBusy
-                            ? const CircularProgressIndicator()
-                            : const Icon(Icons.videocam_off,
-                                color: Colors.white24, size: 48),
-                      ),
+            // Önizleme alanı — kompakt yükseklik
+            Container(
+              height: 200,
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: Colors.white24),
               ),
+              clipBehavior: Clip.hardEdge,
+              child: _previewRenderer != null
+                  ? RTCVideoView(
+                      _previewRenderer!,
+                      objectFit:
+                          RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                      mirror: true,
+                    )
+                  : Center(
+                      child: _previewBusy
+                          ? const CircularProgressIndicator()
+                          : const Icon(Icons.videocam_off,
+                              color: Colors.white24, size: 48),
+                    ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 18),
 
+            // Her ayar kendi satırında, açık etiket ile
             _label('KAMERA CİHAZI'),
             const SizedBox(height: 6),
             _deviceDropdown(
@@ -5035,33 +5057,16 @@ class _SettingsDialogState extends State<_SettingsDialog> {
             ),
             const SizedBox(height: 14),
 
-            // İki sütun: çözünürlük + FPS
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _label('ÇÖZÜNÜRLÜK'),
-                      const SizedBox(height: 6),
-                      _resolutionDropdown(),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _label('FPS'),
-                      const SizedBox(height: 6),
-                      _fpsDropdown(),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+            _label('ÇÖZÜNÜRLÜK'),
+            const SizedBox(height: 6),
+            _resolutionDropdown(),
             const SizedBox(height: 14),
+
+            _label('FPS'),
+            const SizedBox(height: 6),
+            _fpsDropdown(),
+            const SizedBox(height: 18),
+
             if (_cameraError != null) ...[
               Container(
                 padding: const EdgeInsets.all(8),
@@ -5074,39 +5079,23 @@ class _SettingsDialogState extends State<_SettingsDialog> {
               ),
               const SizedBox(height: 10),
             ],
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF202225),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Row(
-                    children: const [
-                      Icon(Icons.info_outline,
-                          color: Colors.white38, size: 14),
-                      SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          'Sesli kanaldaysan değişiklikler anında uygulanır.',
-                          style:
-                              TextStyle(color: Colors.white54, fontSize: 11),
-                        ),
-                      ),
-                    ],
-                  ),
+            // Kaydet butonu tek başına altta — bilgi yazısı çok yer kaplıyordu
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF5865F2),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
-                const Spacer(),
-                FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF5865F2),
-                  ),
-                  icon: const Icon(Icons.save, size: 16),
-                  label: const Text('Kaydet'),
-                  onPressed: _applyCameraSelection,
-                ),
-              ],
+                icon: const Icon(Icons.save, size: 16),
+                label: const Text('Ayarları Kaydet ve Uygula'),
+                onPressed: _applyCameraSelection,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Sesli kanaldaysan değişiklikler anında uygulanır.',
+              style: TextStyle(color: Colors.white38, fontSize: 11),
             ),
           ],
         ],
@@ -5243,6 +5232,7 @@ class _ScreenViewerDialogState extends State<_ScreenViewerDialog> {
   bool _isFullscreen = false;
   bool _controlsVisible = true;
   Timer? _hideTimer;
+  bool _volumeSliderVisible = false;
 
   // Input control state
   bool _inputModeActive = false;
@@ -5546,6 +5536,49 @@ class _ScreenViewerDialogState extends State<_ScreenViewerDialog> {
                                 ),
                               ),
                             ),
+                            // Ekran paylaşımı ses kontrolü (başkasının paylaşımı)
+                            if (focused.kind == 'screen' &&
+                                focused.userId != widget.myUserId) ...[
+                              if (_volumeSliderVisible)
+                                SizedBox(
+                                  width: 130,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.volume_up,
+                                          color: Colors.white, size: 18),
+                                      Expanded(
+                                        child: Slider(
+                                          value: widget.voice
+                                              .getScreenShareVolume(
+                                                  focused.userId),
+                                          min: 0.0,
+                                          max: 2.0,
+                                          divisions: 20,
+                                          activeColor: Colors.orangeAccent,
+                                          onChanged: (v) {
+                                            setState(() {});
+                                            widget.voice.setScreenShareVolume(
+                                                focused.userId, v);
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              IconButton(
+                                icon: Icon(
+                                  _volumeSliderVisible
+                                      ? Icons.volume_up
+                                      : Icons.volume_up_outlined,
+                                  color: Colors.white,
+                                ),
+                                tooltip: 'Yayın ses seviyesi',
+                                onPressed: () => setState(
+                                    () => _volumeSliderVisible =
+                                        !_volumeSliderVisible),
+                              ),
+                            ],
                             // Input control toggle (ekran paylaşımı varsa göster)
                             if (_canControl)
                               IconButton(
@@ -5658,8 +5691,10 @@ class _ScreenViewerDialogState extends State<_ScreenViewerDialog> {
                                   ? Icons.videocam
                                   : Icons.tv;
                               return GestureDetector(
-                                onTap: () =>
-                                    setState(() => _focusKey = f.key),
+                                onTap: () => setState(() {
+                                  _focusKey = f.key;
+                                  _volumeSliderVisible = false;
+                                }),
                                 child: Container(
                                   width: 110,
                                   margin: const EdgeInsets.only(right: 8),
