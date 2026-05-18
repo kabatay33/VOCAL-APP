@@ -136,14 +136,45 @@ if ($canSign) {
   Write-Warning "  Code signing atlandi - SmartScreen agresif uyarir"
 }
 
-# 4) Backend prod deps + bundle
-Write-Host "`n[4/7] Backend bundle hazirlaniyor..."
+# 4) Backend prod deps + bundle (+ portable Node.js)
+Write-Host "`n[4/7] Backend bundle + Node.js hazirlaniyor..."
 # 4a) updater.exe Release\updater\ icine
 $updaterDest = Join-Path $releaseDir "updater"
 if (Test-Path $updaterDest) { Remove-Item $updaterDest -Recurse -Force }
 New-Item -ItemType Directory -Path $updaterDest | Out-Null
 Copy-Item (Join-Path $updaterDir "build\updater.exe") $updaterDest
 Write-Host "  updater.exe OK"
+
+# 4a.5) Portable Node.js — son LTS surumunu cache klasoru icinde tut.
+# Kullanici makinesinde Node.js kurulu degilse backend baslamasin diye
+# node.exe'yi bundle'a dahil ediyoruz. _findNode() once bunu arar.
+$nodeVersion = "v20.18.1" # LTS - stabil
+$nodeCacheDir = Join-Path $projectRoot ".cache\node-$nodeVersion-win-x64"
+$nodeExeCached = Join-Path $nodeCacheDir "node.exe"
+if (-not (Test-Path $nodeExeCached)) {
+  Write-Host "  Node.js portable indiriliyor: $nodeVersion..."
+  New-Item -ItemType Directory -Force -Path $nodeCacheDir | Out-Null
+  $nodeUrl = "https://nodejs.org/dist/$nodeVersion/node-$nodeVersion-win-x64.zip"
+  $nodeZip = Join-Path $env:TEMP "node-$nodeVersion-win-x64.zip"
+  try {
+    Invoke-WebRequest -Uri $nodeUrl -OutFile $nodeZip -UseBasicParsing
+    $tempExtract = Join-Path $env:TEMP "node-extract-$([guid]::NewGuid())"
+    Expand-Archive -Path $nodeZip -DestinationPath $tempExtract -Force
+    $extractedDir = Get-ChildItem $tempExtract -Directory | Select-Object -First 1
+    Copy-Item (Join-Path $extractedDir.FullName "node.exe") $nodeExeCached -Force
+    Remove-Item $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $nodeZip -Force -ErrorAction SilentlyContinue
+    Write-Host "  Node.js cache: $nodeExeCached"
+  } catch {
+    Write-Warning "  Node.js indirilemedi: $_"
+    Write-Warning "  Bundle'da node.exe olmayacak - kullanici Node.js kurmali"
+  }
+}
+if (Test-Path $nodeExeCached) {
+  Copy-Item $nodeExeCached (Join-Path $releaseDir "node.exe") -Force
+  $nodeSize = (Get-Item (Join-Path $releaseDir "node.exe")).Length / 1MB
+  Write-Host "  node.exe bundle edildi ($($nodeSize.ToString('F1')) MB)"
+}
 
 # 4b) backend prod deps install + Release\backend\ icine kopyala
 Push-Location $backendDir

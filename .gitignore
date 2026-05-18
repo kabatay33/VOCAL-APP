@@ -56,3 +56,7 @@ installer/Output/
 # Code signing certificate (private key - never commit)
 installer/cert/*.pfx
 
+
+# Bundled Node.js cache (download)
+.cache/
+
