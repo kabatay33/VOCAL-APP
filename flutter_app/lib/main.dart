@@ -15,31 +15,29 @@ import 'update_gate.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // NOT: Eski auto-spawn updater.exe + exit logic'i kaldırıldı.
-  // Artık güncelleme kontrolü doğrudan UpdateGate splash UI içinde yapılıyor.
-  // Kullanıcı indirme/uygulama sürecini görsel olarak takip edebilir.
-  // (Eski lock file pattern de gereksiz hale geldi — temizlenebilir.)
+  // Eski stale lock file temizliği
   if (!kIsWeb && Platform.isWindows) {
-    // Eski sürümlerden gelen stale lock file'ı temizle (tutarlılık için)
     _cleanupStaleLockFile();
   }
 
+  // Window manager'i hemen hazırla (FAST PATH) — backend bekleme YOK!
+  // Beyaz ekran çıkmasın diye Flutter ilk frame'i render etmeden window
+  // gösterilmiyor; render edince hemen splash UI çıkar.
   if (!kIsWeb &&
       (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
     await windowManager.ensureInitialized();
-    // Cercevesiz (frameless) tasarim — kendi title bar'imizi cizdirecegiz.
     const opts = WindowOptions(
       title: 'LocalHub',
       titleBarStyle: TitleBarStyle.hidden,
-      backgroundColor: Color(0xFF202225),
+      backgroundColor: Color(0xFF1E1F22),
+      // skipTaskbar: false (default), kullanıcı taskbar'da görsün
     );
+    // waitUntilReadyToShow callback'inde HENÜZ show etmiyoruz —
+    // ilk Flutter frame render edildikten sonra göstereceğiz.
     await windowManager.waitUntilReadyToShow(opts, () async {
       await windowManager.setTitle('LocalHub');
-      await windowManager.show();
-      await windowManager.focus();
+      // show + focus burada yapılmıyor → beyaz ekran yok
     });
-    // System tray + pencere kapatma yakalama
-    await TrayService().init();
   }
 
   // Kayıtlı backend IP'sini yükle (login ekranından ayarlanıyor)
@@ -48,23 +46,36 @@ Future<void> main() async {
     Config.setHost(savedHost);
   }
 
-  // Backend'i app yaşam döngüsüyle birlikte başlat — node bulunamazsa veya
-  // port 3000 zaten kullanılıyorsa sessizce atlar (friend cihazları için)
-  if (!kIsWeb && Platform.isWindows) {
-    await BackendProcessService.instance.start();
-    // Backend port 3000'de hazır olana kadar bekle (max 10 sn)
-    final backendReady = await BackendProcessService.instance.waitForReady(timeoutSeconds: 10);
-    if (backendReady) {
-      debugPrint('[MAIN] Backend hazır — port 3000 aktif');
-    } else {
-      debugPrint('[MAIN] Backend hazır değil — splash ekranı bekleyecek');
-    }
-  }
-
   // Input injection manager'ı başlat (Windows native SendInput)
   await InputManager.init();
 
+  // runApp HEMEN çağrılıyor — backend startup + waitForReady artık async
+  // olarak splash sırasında çalışıyor (UpdateGate'in waitForBackend kısmı
+  // zaten bekliyordu, burada da fire-and-forget olarak başlatıyoruz).
+  if (!kIsWeb && Platform.isWindows) {
+    // Fire-and-forget: backend'i arka planda başlat, runApp'i bloklama
+    // ignore: discarded_futures
+    BackendProcessService.instance.start().then((_) {
+      debugPrint('[MAIN] Backend process spawn tamamlandı');
+    });
+  }
+
   runApp(const App());
+
+  // İlk frame render edildikten sonra pencereyi göster + tray init.
+  // Bu sayede pencere açıldığı an splash UI hazır olur, beyaz ekran yok.
+  if (!kIsWeb &&
+      (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        await windowManager.show();
+        await windowManager.focus();
+        await TrayService().init();
+      } catch (e) {
+        debugPrint('[MAIN] Window/tray init hata: $e');
+      }
+    });
+  }
 }
 
 /// Eski updater.exe spawn akışından kalan stale lock file'ı temizle.

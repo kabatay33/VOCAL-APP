@@ -30,16 +30,28 @@ class UpdateGate extends StatefulWidget {
   State<UpdateGate> createState() => _UpdateGateState();
 }
 
-class _UpdateGateState extends State<UpdateGate> {
+class _UpdateGateState extends State<UpdateGate>
+    with TickerProviderStateMixin {
   String _status = 'Hazırlanıyor...';
   double? _progress; // null = belirsiz, 0..1 = belirli
   bool _proceeded = false;
   String? _errorDetail;
+  late final AnimationController _spinCtrl;
 
   @override
   void initState() {
     super.initState();
+    _spinCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
+    )..repeat();
     _run();
+  }
+
+  @override
+  void dispose() {
+    _spinCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _run() async {
@@ -400,22 +412,31 @@ Remove-Item -Path \$MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyCont
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // LocalHub logo — hub network konseptli
+              // LocalHub logo — hub network konseptli, sürekli dönüyor
               Container(
-                width: 96,
-                height: 96,
+                width: 110,
+                height: 110,
                 decoration: BoxDecoration(
                   color: const Color(0xFF202225),
-                  borderRadius: BorderRadius.circular(22),
+                  borderRadius: BorderRadius.circular(24),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFF5865F2).withValues(alpha: 0.35),
+                      color:
+                          const Color(0xFF5865F2).withValues(alpha: 0.35),
                       blurRadius: 32,
                       spreadRadius: 4,
                     ),
                   ],
                 ),
-                child: const _HubLogo(),
+                child: AnimatedBuilder(
+                  animation: _spinCtrl,
+                  builder: (context, _) {
+                    return Transform.rotate(
+                      angle: _spinCtrl.value * 2 * math.pi,
+                      child: const _HubLogo(),
+                    );
+                  },
+                ),
               ),
               const SizedBox(height: 28),
               const Text(
