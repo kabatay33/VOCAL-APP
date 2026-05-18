@@ -145,10 +145,16 @@ New-Item -ItemType Directory -Path $updaterDest | Out-Null
 Copy-Item (Join-Path $updaterDir "build\updater.exe") $updaterDest
 Write-Host "  updater.exe OK"
 
-# 4a.5) Portable Node.js — son LTS surumunu cache klasoru icinde tut.
-# Kullanici makinesinde Node.js kurulu degilse backend baslamasin diye
-# node.exe'yi bundle'a dahil ediyoruz. _findNode() once bunu arar.
-$nodeVersion = "v20.18.1" # LTS - stabil
+# 4a.5) Portable Node.js — gelistirici makinesinde kurulu olan sürümü
+# kullan (npm install bu sürümle compile ettiği için, native modüller
+# better-sqlite3 vs. bu sürümle calismaya zorunlu — NODE_MODULE_VERSION
+# eslesmeli). 'node -v' ciktisi 'v24.15.0' formatinda.
+$nodeVersionRaw = (& node -v 2>&1).Trim()
+if ($nodeVersionRaw -notmatch '^v\d+\.\d+\.\d+$') {
+  Write-Error "node -v ciktisi okunamadi: $nodeVersionRaw"
+  exit 1
+}
+$nodeVersion = $nodeVersionRaw
 $nodeCacheDir = Join-Path $projectRoot ".cache\node-$nodeVersion-win-x64"
 $nodeExeCached = Join-Path $nodeCacheDir "node.exe"
 if (-not (Test-Path $nodeExeCached)) {
